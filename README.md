@@ -106,6 +106,30 @@ The coupled second-order ODEs are rewritten as four first-order ODEs by introduc
 
 The double pendulum is a Hamiltonian system -- total energy is conserved, and there is no dissipation. Despite being fully deterministic, the system exhibits sensitive dependence on initial conditions: two trajectories starting with an angular difference as small as 1e-9 radians will diverge exponentially, with the Lyapunov exponent characterizing the rate of separation. This is the hallmark of deterministic chaos, and the reason the long-term behavior of a double pendulum is effectively unpredictable.
 
+## References
+
+### Lagrangian derivation
+
+- [Diego Assencio — Double pendulum: Lagrangian formulation](https://dassencio.org/33) — Step-by-step derivation of the Lagrangian for point masses on massless rods.
+- [LSU Physics (Gabriela Gonzalez) — Double Pendulum lecture notes (PDF)](https://www.phys.lsu.edu/faculty/gonzalez/Teaching/Phys7221/DoublePendulum.pdf) — Graduate-level derivation from a university course.
+- [Wikipedia — Double pendulum](https://en.wikipedia.org/wiki/Double_pendulum) — Standard reference with both the simple (point mass) and compound pendulum variants.
+
+### Equations of motion
+
+- [myPhysicsLab — Double Pendulum](https://www.myphysicslab.com/pendulum/double-pendulum-en.html) — Derives the coupled angular acceleration equations with an interactive simulation. Also has a [detailed PDF derivation](https://www.myphysicslab.com/develop/docs/Double_Pendulum.pdf).
+- [Eric Weisstein's World of Physics — Double Pendulum](https://scienceworld.wolfram.com/physics/DoublePendulum.html) — Compact reference with the standard equations of motion.
+- [UC Berkeley — The Double Pendulum](https://rotations.berkeley.edu/the-double-pendulum/) — Clean derivation from a university physics course.
+
+### Chaos and Lyapunov exponents
+
+- [Shinbrot et al. — "Chaos in a double pendulum" (American Journal of Physics, 1992)](https://yorke.umd.edu/Yorke_papers_most_cited_and_post2000/1992-04-Wisdom_Shinbrot_AmerJPhys_double_pendulum.pdf) — The classic paper. Measures Lyapunov exponent experimentally at 7.5 +/- 1.5 s^-1, confirming exponential divergence of nearby trajectories.
+- [SciELO — "Deterministic chaos: A pedagogical review of the double pendulum case"](https://www.scielo.br/j/rbef/a/SsWk5qnzBgvmYB4hRtkbwqM/?lang=en) — Peer-reviewed pedagogical paper covering sensitive dependence, Lyapunov exponents, and phase space structure.
+- [Kyle Monette — "Double Pendulum: Lagrangian Mechanics and Chaos" (PDF)](https://kylemonette.github.io/files/mccnny-2022.pdf) — Undergraduate research paper tying together the Lagrangian derivation and chaotic analysis.
+
+### Numerical methods
+
+- [SciPython — The double pendulum](https://scipython.com/blog/the-double-pendulum/) — Python implementation using the same RK45 / `solve_ivp` approach, with identical equations of motion.
+
 ## Project structure
 
 ```
