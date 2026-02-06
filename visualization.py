@@ -13,7 +13,7 @@ from PyQt6.QtGui import QPainter, QPen, QBrush, QColor, QFont
 from PyQt6.QtWidgets import (
     QWidget, QMainWindow, QHBoxLayout, QVBoxLayout, QGridLayout,
     QSlider, QLabel, QPushButton, QComboBox, QGroupBox, QSplitter,
-    QStatusBar,
+    QStatusBar, QCheckBox,
 )
 
 from simulation import (
@@ -35,6 +35,8 @@ class PendulumCanvas(QWidget):
         self.params = DoublePendulumParams()
         self.state = [0.0, 0.0, 0.0, 0.0]
         self.trail = deque(maxlen=self.TRAIL_LENGTH)
+        self.show_axes = False
+        self.show_velocity = False
         self.setMinimumSize(400, 400)
 
     def set_state(self, state, params, append_trail=True):
@@ -65,12 +67,158 @@ class PendulumCanvas(QWidget):
         py = cy - y * scale  # flip y: physics y-down becomes screen y-down
         return px, py
 
+    def _draw_axes(self, painter):
+        """Draw faint concentric distance rings and crosshairs from the pivot."""
+        total_length = self.params.l1 + self.params.l2
+        w, h = self.width(), self.height()
+        scale = min(w, h) * 0.38 / max(total_length, 0.01)
+        cx = w / 2
+        cy = h * 0.35
+
+        # Pick a nice step: 0.5m for short pendulums, 1m for longer
+        step = 0.5 if total_length <= 3.0 else 1.0
+        max_r = total_length + step  # one ring past max reach
+
+        ring_pen = QPen(QColor(255, 255, 255, 30))
+        ring_pen.setWidthF(1.0)
+        ring_pen.setStyle(Qt.PenStyle.DashLine)
+        painter.setPen(ring_pen)
+
+        label_font = QFont()
+        label_font.setPointSizeF(9)
+        painter.setFont(label_font)
+
+        r = step
+        while r <= max_r:
+            r_px = r * scale
+            painter.setPen(ring_pen)
+            painter.setBrush(Qt.BrushStyle.NoBrush)
+            painter.drawEllipse(QPointF(cx, cy), r_px, r_px)
+
+            # Label on the right of each ring
+            painter.setPen(QColor(255, 255, 255, 50))
+            label = f"{r:.1f} m" if step < 1.0 else f"{r:.0f} m"
+            painter.drawText(QPointF(cx + r_px + 3, cy - 2), label)
+            r += step
+
+        # Crosshair lines through pivot
+        line_pen = QPen(QColor(255, 255, 255, 20))
+        line_pen.setWidthF(1.0)
+        painter.setPen(line_pen)
+        painter.drawLine(QPointF(0, cy), QPointF(w, cy))
+        painter.drawLine(QPointF(cx, 0), QPointF(cx, h))
+
+    def _draw_arrow(self, painter, x0, y0, x1, y1, color):
+        """Draw a single arrow from (x0,y0) to (x1,y1) in pixel coords."""
+        dx, dy = x1 - x0, y1 - y0
+        length = math.hypot(dx, dy)
+        if length < 2:
+            return
+        pen = QPen(color)
+        pen.setWidthF(2.0)
+        painter.setPen(pen)
+        painter.drawLine(QPointF(x0, y0), QPointF(x1, y1))
+
+        # Arrowhead
+        head_size = min(8, length * 0.35)
+        angle = math.atan2(dy, dx)
+        for sign in [1, -1]:
+            a = angle + math.pi - sign * math.radians(25)
+            hx = x1 + head_size * math.cos(a)
+            hy = y1 + head_size * math.sin(a)
+            painter.drawLine(QPointF(x1, y1), QPointF(hx, hy))
+
+    def _draw_velocity_arrows(self, painter, bob1_px, bob2_px):
+        """Draw velocity arrows at each bob showing initial angular velocities."""
+        theta1, theta2, omega1, omega2 = self.state
+        l1, l2 = self.params.l1, self.params.l2
+
+        w, h = self.width(), self.height()
+        total_length = l1 + l2
+        scale = min(w, h) * 0.38 / max(total_length, 0.01)
+        arrow_scale = scale * 0.12
+
+        # Component from omega1: same for both bobs
+        cvx1 = l1 * math.cos(theta1) * omega1
+        cvy1 = l1 * math.sin(theta1) * omega1
+        # Component from omega2: only affects bob2
+        cvx2 = l2 * math.cos(theta2) * omega2
+        cvy2 = l2 * math.sin(theta2) * omega2
+
+        # To pixel deltas (flip y)
+        dx1, dy1 = cvx1 * arrow_scale, -cvy1 * arrow_scale
+        dx2, dy2 = cvx2 * arrow_scale, -cvy2 * arrow_scale
+
+        bob1_color = QColor(255, 120, 80)
+        bob2_color = QColor(80, 200, 255)
+        net_color = QColor(255, 220, 60)
+
+        # --- Bob 1: single arrow (omega1 contribution only) ---
+        bx1, by1 = bob1_px
+        self._draw_arrow(painter, bx1, by1, bx1 + dx1, by1 + dy1, bob1_color)
+
+        # --- Bob 2: three arrows showing vector addition ---
+        bx2, by2 = bob2_px
+        has_omega1 = math.hypot(dx1, dy1) >= 2
+        has_omega2 = math.hypot(dx2, dy2) >= 2
+
+        # Orange: omega1 contribution, rooted at bob2
+        if has_omega1:
+            self._draw_arrow(painter, bx2, by2, bx2 + dx1, by2 + dy1, bob1_color)
+
+        # Blue: omega2 contribution, chained from tip of orange
+        if has_omega2:
+            self._draw_arrow(painter, bx2 + dx1, by2 + dy1,
+                             bx2 + dx1 + dx2, by2 + dy1 + dy2, bob2_color)
+
+        # Yellow: net velocity (only if both components are nonzero, otherwise
+        # the net arrow would just overlap the single visible component)
+        net_dx = dx1 + dx2
+        net_dy = dy1 + dy2
+        has_net = math.hypot(net_dx, net_dy) >= 2
+        if has_omega1 and has_omega2 and has_net:
+            self._draw_arrow(painter, bx2, by2,
+                             bx2 + net_dx, by2 + net_dy, net_color)
+
+        # Red: projection of net velocity onto the tangential direction
+        # (perpendicular to arm l2), which is the actual direction of motion
+        # of bob2 around bob1.
+        # Tangent direction in physics coords: (cos(theta2), sin(theta2))
+        # In pixel coords (flip y): (cos(theta2), -sin(theta2))
+        if has_net:
+            tx = math.cos(theta2)
+            ty = -math.sin(theta2)  # flipped for pixel coords
+            # Net velocity in physics coords
+            vx_net = cvx1 + cvx2
+            vy_net = cvy1 + cvy2
+            # Project onto tangent (in physics coords, before flip)
+            proj_mag = vx_net * math.cos(theta2) + vy_net * math.sin(theta2)
+            proj_dx = tx * proj_mag * arrow_scale
+            proj_dy = ty * proj_mag * arrow_scale
+
+            if math.hypot(proj_dx, proj_dy) >= 2:
+                proj_color = QColor(220, 50, 50)
+                self._draw_arrow(painter, bx2, by2,
+                                 bx2 + proj_dx, by2 + proj_dy, proj_color)
+
+                # Dashed line from net tip to projection tip
+                dash_pen = QPen(QColor(255, 255, 255, 80))
+                dash_pen.setWidthF(1.0)
+                dash_pen.setStyle(Qt.PenStyle.DashLine)
+                painter.setPen(dash_pen)
+                painter.drawLine(QPointF(bx2 + net_dx, by2 + net_dy),
+                                 QPointF(bx2 + proj_dx, by2 + proj_dy))
+
     def paintEvent(self, event):
         painter = QPainter(self)
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
 
         # Background
         painter.fillRect(self.rect(), QColor(20, 20, 30))
+
+        # --- Axes / distance rings ---
+        if self.show_axes:
+            self._draw_axes(painter)
 
         x1, y1, x2, y2 = positions(self.state, self.params)
         pivot_px = self._to_pixel(0, 0)
@@ -108,6 +256,10 @@ class PendulumCanvas(QWidget):
         painter.drawEllipse(QPointF(*bob1_px), bob_radius_1, bob_radius_1)
         painter.setBrush(QBrush(QColor(80, 200, 255)))
         painter.drawEllipse(QPointF(*bob2_px), bob_radius_2, bob_radius_2)
+
+        # --- Velocity arrows (initial conditions only) ---
+        if self.show_velocity:
+            self._draw_velocity_arrows(painter, bob1_px, bob2_px)
 
         painter.end()
 
@@ -238,10 +390,13 @@ class ControlPanel(QWidget):
             self.speed_combo.addItem(s)
         self.speed_combo.setCurrentIndex(2)  # default 1x
 
+        self.axes_checkbox = QCheckBox("Show axes")
+
         pb_layout.addWidget(self.play_btn)
         pb_layout.addWidget(self.reset_btn)
         pb_layout.addWidget(QLabel("Speed:"))
         pb_layout.addWidget(self.speed_combo)
+        pb_layout.addWidget(self.axes_checkbox)
 
         main_layout.addWidget(pb_group)
         main_layout.addStretch()
@@ -333,6 +488,7 @@ class MainWindow(QMainWindow):
         self.controls.reset_btn.clicked.connect(self._reset)
         self.controls.timeline_slider.sliderMoved.connect(self._on_scrub)
         self.controls.timeline_slider.sliderPressed.connect(self._on_scrub_pressed)
+        self.controls.axes_checkbox.toggled.connect(self._on_axes_toggled)
 
         # Run initial simulation
         self._run_simulation()
@@ -375,6 +531,7 @@ class MainWindow(QMainWindow):
         t = self.t_array[self.current_index]
         t_end = self.t_array[-1]
 
+        self.canvas.show_velocity = (self.current_index == 0 and not self.playing)
         self.canvas.set_state(state, params)
 
         # Timeline label
@@ -441,6 +598,12 @@ class MainWindow(QMainWindow):
             _, _, x2, y2 = positions(self.state_array[i], params)
             self.canvas.trail.append((x2, y2))
         self._update_display()
+
+    # -- Axes toggle --
+
+    def _on_axes_toggled(self, checked):
+        self.canvas.show_axes = checked
+        self.canvas.update()
 
     # -- Parameter changes --
 
