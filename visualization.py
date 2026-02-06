@@ -151,63 +151,50 @@ class PendulumCanvas(QWidget):
 
         bob1_color = QColor(255, 120, 80)
         bob2_color = QColor(80, 200, 255)
-        net_color = QColor(255, 220, 60)
+        proj_color = QColor(255, 220, 60)
 
         # --- Bob 1: single arrow (omega1 contribution only) ---
         bx1, by1 = bob1_px
         self._draw_arrow(painter, bx1, by1, bx1 + dx1, by1 + dy1, bob1_color)
 
-        # --- Bob 2: three arrows showing vector addition ---
+        # --- Bob 2: decomposed velocity arrows ---
         bx2, by2 = bob2_px
         has_omega1 = math.hypot(dx1, dy1) >= 2
         has_omega2 = math.hypot(dx2, dy2) >= 2
 
-        # Orange: omega1 contribution, rooted at bob2
-        if has_omega1:
-            self._draw_arrow(painter, bx2, by2, bx2 + dx1, by2 + dy1, bob1_color)
-
-        # Blue: omega2 contribution, chained from tip of orange
+        # Blue: omega2 contribution, rooted at bob2 (already tangential to arm l2)
         if has_omega2:
-            self._draw_arrow(painter, bx2 + dx1, by2 + dy1,
-                             bx2 + dx1 + dx2, by2 + dy1 + dy2, bob2_color)
+            self._draw_arrow(painter, bx2, by2, bx2 + dx2, by2 + dy2, bob2_color)
 
-        # Yellow: net velocity (only if both components are nonzero, otherwise
-        # the net arrow would just overlap the single visible component)
-        net_dx = dx1 + dx2
-        net_dy = dy1 + dy2
-        has_net = math.hypot(net_dx, net_dy) >= 2
-        if has_omega1 and has_omega2 and has_net:
-            self._draw_arrow(painter, bx2, by2,
-                             bx2 + net_dx, by2 + net_dy, net_color)
+        # Orange: omega1 contribution, chained from tip of blue
+        if has_omega1:
+            self._draw_arrow(painter, bx2 + dx2, by2 + dy2,
+                             bx2 + dx2 + dx1, by2 + dy2 + dy1, bob1_color)
 
-        # Red: projection of net velocity onto the tangential direction
-        # (perpendicular to arm l2), which is the actual direction of motion
-        # of bob2 around bob1.
+        # Red: projection of omega1 contribution onto the tangential direction
+        # (perpendicular to arm l2). omega2 is already tangential, so only
+        # the omega1 component needs projecting.
         # Tangent direction in physics coords: (cos(theta2), sin(theta2))
-        # In pixel coords (flip y): (cos(theta2), -sin(theta2))
-        if has_net:
-            tx = math.cos(theta2)
-            ty = -math.sin(theta2)  # flipped for pixel coords
-            # Net velocity in physics coords
-            vx_net = cvx1 + cvx2
-            vy_net = cvy1 + cvy2
-            # Project onto tangent (in physics coords, before flip)
-            proj_mag = vx_net * math.cos(theta2) + vy_net * math.sin(theta2)
-            proj_dx = tx * proj_mag * arrow_scale
-            proj_dy = ty * proj_mag * arrow_scale
+        if has_omega1:
+            proj_mag = cvx1 * math.cos(theta2) + cvy1 * math.sin(theta2)
+            # In pixel coords (flip y for tangent)
+            pdx = math.cos(theta2) * proj_mag * arrow_scale
+            pdy = -math.sin(theta2) * proj_mag * arrow_scale
 
-            if math.hypot(proj_dx, proj_dy) >= 2:
-                proj_color = QColor(220, 50, 50)
-                self._draw_arrow(painter, bx2, by2,
-                                 bx2 + proj_dx, by2 + proj_dy, proj_color)
+            if math.hypot(pdx, pdy) >= 2:
+                # Red arrow from blue tip (same base as orange)
+                base_x = bx2 + dx2
+                base_y = by2 + dy2
+                self._draw_arrow(painter, base_x, base_y,
+                                 base_x + pdx, base_y + pdy, proj_color)
 
-                # Dashed line from net tip to projection tip
+                # Dashed line from orange tip to red tip
                 dash_pen = QPen(QColor(255, 255, 255, 80))
                 dash_pen.setWidthF(1.0)
                 dash_pen.setStyle(Qt.PenStyle.DashLine)
                 painter.setPen(dash_pen)
-                painter.drawLine(QPointF(bx2 + net_dx, by2 + net_dy),
-                                 QPointF(bx2 + proj_dx, by2 + proj_dy))
+                painter.drawLine(QPointF(bx2 + dx2 + dx1, by2 + dy2 + dy1),
+                                 QPointF(base_x + pdx, base_y + pdy))
 
     def paintEvent(self, event):
         painter = QPainter(self)
