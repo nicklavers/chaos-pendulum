@@ -4,16 +4,18 @@ Contains PendulumCanvas (QPainter rendering), ControlPanel (sliders and
 playback controls), and MainWindow (wiring everything together).
 """
 
+import itertools
 import math
+import random
 from collections import deque
 
 import numpy as np
-from PyQt6.QtCore import Qt, QTimer, QPointF
-from PyQt6.QtGui import QPainter, QPen, QBrush, QColor, QFont
+from PyQt6.QtCore import Qt, QTimer, QPointF, QRectF, QThread
+from PyQt6.QtGui import QPainter, QPen, QBrush, QColor, QFont, QPainterPath
 from PyQt6.QtWidgets import (
     QWidget, QMainWindow, QHBoxLayout, QVBoxLayout, QGridLayout,
     QSlider, QLabel, QPushButton, QComboBox, QGroupBox, QSplitter,
-    QStatusBar, QCheckBox,
+    QStatusBar, QCheckBox, QSpinBox,
 )
 
 from simulation import (
@@ -33,23 +35,45 @@ class PendulumCanvas(QWidget):
     def __init__(self, parent=None):
         super().__init__(parent)
         self.params = DoublePendulumParams()
-        self.state = [0.0, 0.0, 0.0, 0.0]
-        self.trail = deque(maxlen=self.TRAIL_LENGTH)
+        self.states = [[0.0, 0.0, 0.0, 0.0]]
+        self.trails = [deque(maxlen=self.TRAIL_LENGTH)]
+        self.primary_index = 0
         self.show_axes = False
         self.show_velocity = False
         self.setMinimumSize(400, 400)
 
-    def set_state(self, state, params, append_trail=True):
-        """Update the state shown on the canvas."""
-        self.state = state
+    @property
+    def state(self):
+        """Primary trajectory state (backwards compat)."""
+        return self.states[self.primary_index]
+
+    @property
+    def trail(self):
+        """Primary trajectory trail (backwards compat)."""
+        return self.trails[self.primary_index]
+
+    def set_states(self, states_list, params, append_trail=True):
+        """Update all trajectory states on the canvas."""
+        self.states = states_list
         self.params = params
+        # Ensure we have the right number of trail deques
+        while len(self.trails) < len(states_list):
+            self.trails.append(deque(maxlen=self.TRAIL_LENGTH))
         if append_trail:
-            _, _, x2, y2 = positions(state, params)
-            self.trail.append((x2, y2))
+            for i, st in enumerate(states_list):
+                _, _, x2, y2 = positions(st, params)
+                self.trails[i].append((x2, y2))
         self.update()
 
+    def set_state(self, state, params, append_trail=True):
+        """Update single-trajectory state (backwards compat)."""
+        self.set_states([state], params, append_trail)
+
+    def clear_trails(self):
+        self.trails = [deque(maxlen=self.TRAIL_LENGTH)]
+
     def clear_trail(self):
-        self.trail.clear()
+        self.clear_trails()
 
     def _to_pixel(self, x, y):
         """Convert physics coords to pixel coords.
@@ -207,14 +231,44 @@ class PendulumCanvas(QWidget):
         if self.show_axes:
             self._draw_axes(painter)
 
-        x1, y1, x2, y2 = positions(self.state, self.params)
+        # Shared pivot point
         pivot_px = self._to_pixel(0, 0)
+
+        # --- Secondary trajectories: translucent full pendulums ---
+        if len(self.states) > 1:
+            ghost_alpha = max(10, min(40, 800 // len(self.states)))
+            bob_r1 = 6 + 4 * self.params.m1
+            bob_r2 = 6 + 4 * self.params.m2
+            arm_pen = QPen(QColor(200, 200, 200, ghost_alpha))
+            arm_pen.setWidthF(2.0)
+            for i, st in enumerate(self.states):
+                if i == self.primary_index:
+                    continue
+                sx1, sy1, sx2, sy2 = positions(st, self.params)
+                sb1 = self._to_pixel(sx1, sy1)
+                sb2 = self._to_pixel(sx2, sy2)
+                # Arms
+                painter.setPen(arm_pen)
+                painter.setBrush(Qt.BrushStyle.NoBrush)
+                painter.drawLine(QPointF(*pivot_px), QPointF(*sb1))
+                painter.drawLine(QPointF(*sb1), QPointF(*sb2))
+                # Bobs
+                painter.setPen(Qt.PenStyle.NoPen)
+                painter.setBrush(QBrush(QColor(255, 120, 80, ghost_alpha)))
+                painter.drawEllipse(QPointF(*sb1), bob_r1, bob_r1)
+                painter.setBrush(QBrush(QColor(80, 200, 255, ghost_alpha)))
+                painter.drawEllipse(QPointF(*sb2), bob_r2, bob_r2)
+
+        # --- Primary trajectory ---
+        primary = self.states[self.primary_index]
+        x1, y1, x2, y2 = positions(primary, self.params)
         bob1_px = self._to_pixel(x1, y1)
         bob2_px = self._to_pixel(x2, y2)
 
-        # --- Trail ---
-        if len(self.trail) > 1:
-            trail_list = list(self.trail)
+        # --- Trail (primary only) ---
+        primary_trail = self.trails[self.primary_index] if self.primary_index < len(self.trails) else deque()
+        if len(primary_trail) > 1:
+            trail_list = list(primary_trail)
             for i in range(1, len(trail_list)):
                 alpha = int(255 * i / len(trail_list))
                 pen = QPen(QColor(100, 200, 255, alpha))
@@ -244,7 +298,7 @@ class PendulumCanvas(QWidget):
         painter.setBrush(QBrush(QColor(80, 200, 255)))
         painter.drawEllipse(QPointF(*bob2_px), bob_radius_2, bob_radius_2)
 
-        # --- Velocity arrows (initial conditions only) ---
+        # --- Velocity arrows (initial conditions only, primary only) ---
         if self.show_velocity:
             self._draw_velocity_arrows(painter, bob1_px, bob2_px)
 
@@ -300,6 +354,37 @@ class ControlPanel(QWidget):
         _update(slider.value())
         return value_label
 
+    def _add_spread_count_row(self, layout, row, spread_slider, count_spinbox, unit=""):
+        """Add an indented spread slider + count spinbox row below an IC row."""
+        spread_label = QLabel("  spread")
+        spread_label.setStyleSheet("color: #888;")
+        spread_value = QLabel()
+        spread_value.setMinimumWidth(55)
+        spread_value.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+
+        n_label = QLabel("n=")
+        n_label.setStyleSheet("color: #888;")
+
+        layout.addWidget(spread_label, row, 0)
+        layout.addWidget(spread_slider, row, 1)
+        layout.addWidget(spread_value, row, 2)
+        layout.addWidget(n_label, row, 3)
+        layout.addWidget(count_spinbox, row, 4)
+
+        def _update_spread(val, vl=spread_value, sl=spread_slider, u=unit):
+            vl.setText(f"{self._slider_value(sl):.2f}{u}")
+            if not self._building:
+                self._on_param_changed()
+
+        spread_slider.valueChanged.connect(_update_spread)
+        _update_spread(spread_slider.value())
+
+        def _update_count(val):
+            if not self._building:
+                self._on_param_changed()
+
+        count_spinbox.valueChanged.connect(_update_count)
+
     # -- UI construction --
 
     def _init_ui(self):
@@ -316,10 +401,30 @@ class ControlPanel(QWidget):
         self.omega1_slider = self._make_slider(-10, 10, 0)
         self.omega2_slider = self._make_slider(-10, 10, 0)
 
+        # Spread sliders (range 0 to full range of parent)
+        self.theta1_spread = self._make_slider(0, 2 * math.pi, 0)
+        self.theta2_spread = self._make_slider(0, 2 * math.pi, 0)
+        self.omega1_spread = self._make_slider(0, 20, 0)
+        self.omega2_spread = self._make_slider(0, 20, 0)
+
+        # Count spinboxes
+        self.theta1_count = QSpinBox(); self.theta1_count.setRange(1, 100); self.theta1_count.setValue(1)
+        self.theta2_count = QSpinBox(); self.theta2_count.setRange(1, 100); self.theta2_count.setValue(1)
+        self.omega1_count = QSpinBox(); self.omega1_count.setRange(1, 100); self.omega1_count.setValue(1)
+        self.omega2_count = QSpinBox(); self.omega2_count.setRange(1, 100); self.omega2_count.setValue(1)
+
+        # Row 0: theta1 center, Row 1: theta1 spread/count
         self._add_param_row(ic_layout, 0, "\u03b81\u2080", self.theta1_slider, " rad")
-        self._add_param_row(ic_layout, 1, "\u03b82\u2080", self.theta2_slider, " rad")
-        self._add_param_row(ic_layout, 2, "\u03c91\u2080", self.omega1_slider, " /s")
-        self._add_param_row(ic_layout, 3, "\u03c92\u2080", self.omega2_slider, " /s")
+        self._add_spread_count_row(ic_layout, 1, self.theta1_spread, self.theta1_count, " rad")
+        # Row 2: theta2 center, Row 3: theta2 spread/count
+        self._add_param_row(ic_layout, 2, "\u03b82\u2080", self.theta2_slider, " rad")
+        self._add_spread_count_row(ic_layout, 3, self.theta2_spread, self.theta2_count, " rad")
+        # Row 4: omega1 center, Row 5: omega1 spread/count
+        self._add_param_row(ic_layout, 4, "\u03c91\u2080", self.omega1_slider, " /s")
+        self._add_spread_count_row(ic_layout, 5, self.omega1_spread, self.omega1_count, " /s")
+        # Row 6: omega2 center, Row 7: omega2 spread/count
+        self._add_param_row(ic_layout, 6, "\u03c92\u2080", self.omega2_slider, " /s")
+        self._add_spread_count_row(ic_layout, 7, self.omega2_spread, self.omega2_count, " /s")
 
         main_layout.addWidget(ic_group)
 
@@ -340,13 +445,28 @@ class ControlPanel(QWidget):
 
         main_layout.addWidget(sys_group)
 
-        # --- Simulation Duration ---
+        # --- Simulation ---
         sim_group = QGroupBox("Simulation")
         sim_layout = QGridLayout()
         sim_group.setLayout(sim_layout)
 
         self.t_end_slider = self._make_slider(5, 60, 30, resolution=1)
         self._add_param_row(sim_layout, 0, "Duration", self.t_end_slider, " s")
+
+        # Max trajectories
+        max_traj_label = QLabel("Max trajectories")
+        self.max_trajectories_spin = QSpinBox()
+        self.max_trajectories_spin.setRange(1, 5000)
+        self.max_trajectories_spin.setValue(500)
+        self.max_trajectories_spin.valueChanged.connect(
+            lambda v: self._on_param_changed() if not self._building else None
+        )
+        sim_layout.addWidget(max_traj_label, 1, 0)
+        sim_layout.addWidget(self.max_trajectories_spin, 1, 1)
+
+        self.trajectory_count_label = QLabel("Trajectories: 1")
+        self.trajectory_count_label.setStyleSheet("color: #aaa;")
+        sim_layout.addWidget(self.trajectory_count_label, 2, 0, 1, 3)
 
         main_layout.addWidget(sim_group)
 
@@ -406,6 +526,18 @@ class ControlPanel(QWidget):
             l2=self._slider_value(self.l2_slider),
         )
 
+    def get_spread_counts(self):
+        """Return list of (spread, count) for each IC: theta1, theta2, omega1, omega2."""
+        return [
+            (self._slider_value(self.theta1_spread), self.theta1_count.value()),
+            (self._slider_value(self.theta2_spread), self.theta2_count.value()),
+            (self._slider_value(self.omega1_spread), self.omega1_count.value()),
+            (self._slider_value(self.omega2_spread), self.omega2_count.value()),
+        ]
+
+    def get_max_trajectories(self):
+        return self.max_trajectories_spin.value()
+
     def get_t_end(self):
         return self._slider_value(self.t_end_slider)
 
@@ -418,6 +550,193 @@ class ControlPanel(QWidget):
     def _on_param_changed(self):
         """Called when any parameter slider changes. MainWindow overrides."""
         pass
+
+
+# ---------------------------------------------------------------------------
+# LoadingOverlay
+# ---------------------------------------------------------------------------
+
+class LoadingOverlay(QWidget):
+    """Semi-transparent overlay with an orbital loading animation."""
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.message = "Simulating..."
+        self.t = 0.0
+        self._timer = QTimer()
+        self._timer.setInterval(16)  # ~60 fps
+        self._timer.timeout.connect(self._tick)
+        self.hide()
+
+    def start(self, message="Simulating..."):
+        self.message = message
+        self.t = 0.0
+        if self.parentWidget():
+            self.resize(self.parentWidget().size())
+        self.show()
+        self.raise_()
+        self._timer.start()
+
+    def stop(self):
+        self._timer.stop()
+        self.hide()
+
+    def _tick(self):
+        self.t += 0.016
+        self.update()
+
+    def paintEvent(self, event):
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        w, h = self.width(), self.height()
+
+        # Dim background
+        painter.fillRect(self.rect(), QColor(20, 20, 30, 180))
+
+        cx, cy = w / 2, h / 2 - 15  # slightly above center for text room
+
+        # --- Moon orbital parameters ---
+        # Big moon: tighter orbit, steeper tilt
+        big_orbit_a, big_orbit_b = 36, 22
+        big_rot = math.radians(50)
+        big_period = 2.0
+        big_r = 7
+        big_angle = 2 * math.pi * self.t / big_period
+
+        big_lx = big_orbit_a * math.cos(big_angle)
+        big_ly = big_orbit_b * math.sin(big_angle)
+        big_sx = big_lx * math.cos(big_rot) - big_ly * math.sin(big_rot)
+        big_sy = big_lx * math.sin(big_rot) + big_ly * math.cos(big_rot)
+        big_behind = math.sin(big_angle) > 0
+
+        # Small moon: wider orbit, nearly horizontal
+        sm_orbit_a, sm_orbit_b = 52, 14
+        sm_rot = math.radians(-5)
+        sm_period = 3.2
+        sm_r = 4
+        sm_angle = 2 * math.pi * self.t / sm_period
+
+        sm_lx = sm_orbit_a * math.cos(sm_angle)
+        sm_ly = sm_orbit_b * math.sin(sm_angle)
+        sm_sx = sm_lx * math.cos(sm_rot) - sm_ly * math.sin(sm_rot)
+        sm_sy = sm_lx * math.sin(sm_rot) + sm_ly * math.cos(sm_rot)
+        sm_behind = math.sin(sm_angle) > 0
+
+        # Planet wobble (reacts to moon gravity)
+        wobble_x = -(big_sx * 0.05 + sm_sx * 0.02)
+        wobble_y = -(big_sy * 0.05 + sm_sy * 0.02)
+        px, py = cx + wobble_x, cy + wobble_y
+
+        # Planet geometry
+        planet_r = 24
+        ring_a, ring_b = 42, 10
+        ring_angle_deg = 20  # cocked ring tilt
+
+        ring_pen = QPen(QColor(190, 170, 110))
+        ring_pen.setWidthF(5)
+        ring_pen.setCapStyle(Qt.PenCapStyle.RoundCap)
+
+        ring_rect = QRectF(-ring_a, -ring_b, 2 * ring_a, 2 * ring_b)
+
+        # ---- Behind moons ----
+        painter.setPen(Qt.PenStyle.NoPen)
+        if big_behind:
+            painter.setBrush(QBrush(QColor(160, 175, 195)))
+            painter.drawEllipse(QPointF(px + big_sx, py + big_sy), big_r, big_r)
+        if sm_behind:
+            painter.setBrush(QBrush(QColor(170, 170, 180)))
+            painter.drawEllipse(QPointF(px + sm_sx, py + sm_sy), sm_r, sm_r)
+
+        # ---- Back ring arc (behind planet) ----
+        painter.save()
+        painter.translate(px, py)
+        painter.rotate(ring_angle_deg)
+        painter.setPen(ring_pen)
+        painter.setBrush(Qt.BrushStyle.NoBrush)
+        painter.drawArc(ring_rect, 0, 180 * 16)  # top half = behind
+        painter.restore()
+
+        # ---- Planet body ----
+        painter.setPen(Qt.PenStyle.NoPen)
+        painter.setBrush(QBrush(QColor(210, 160, 80)))
+        painter.drawEllipse(QPointF(px, py), planet_r, planet_r)
+
+        # Subtle bands for Saturn look
+        clip = QPainterPath()
+        clip.addEllipse(QPointF(px, py), planet_r, planet_r)
+        painter.save()
+        painter.setClipPath(clip)
+        painter.setBrush(QBrush(QColor(190, 140, 60)))
+        painter.drawRect(QRectF(px - planet_r - 1, py - 4, 2 * planet_r + 2, 7))
+        painter.setBrush(QBrush(QColor(200, 155, 75)))
+        painter.drawRect(QRectF(px - planet_r - 1, py + 8, 2 * planet_r + 2, 4))
+        painter.restore()
+
+        # ---- Front ring arc (in front of planet) ----
+        painter.save()
+        painter.translate(px, py)
+        painter.rotate(ring_angle_deg)
+        painter.setPen(ring_pen)
+        painter.setBrush(Qt.BrushStyle.NoBrush)
+        painter.drawArc(ring_rect, 180 * 16, 180 * 16)  # bottom half = in front
+        painter.restore()
+
+        # ---- Front moons ----
+        painter.setPen(Qt.PenStyle.NoPen)
+        if not big_behind:
+            painter.setBrush(QBrush(QColor(160, 175, 195)))
+            painter.drawEllipse(QPointF(px + big_sx, py + big_sy), big_r, big_r)
+        if not sm_behind:
+            painter.setBrush(QBrush(QColor(170, 170, 180)))
+            painter.drawEllipse(QPointF(px + sm_sx, py + sm_sy), sm_r, sm_r)
+
+        # ---- Text (bobs with amplified wobble) ----
+        text_wobble_y = wobble_y * 3.0
+        painter.setPen(QColor(255, 255, 255, 200))
+        font = QFont("Chalkboard SE")
+        font.setPointSizeF(16)
+        font.setBold(True)
+        painter.setFont(font)
+        text_rect = QRectF(0, cy + 65 + text_wobble_y, w, 40)
+        painter.drawText(
+            text_rect,
+            Qt.AlignmentFlag.AlignHCenter | Qt.AlignmentFlag.AlignTop,
+            self.message,
+        )
+
+        painter.end()
+
+
+# ---------------------------------------------------------------------------
+# SimWorker
+# ---------------------------------------------------------------------------
+
+class SimWorker(QThread):
+    """Runs multi-trajectory simulation in a background thread."""
+
+    def __init__(self, params, ic_list, t_end, dt):
+        super().__init__()
+        self.params = params
+        self.ic_list = ic_list
+        self.t_end = t_end
+        self.dt = dt
+        self.t_array = None
+        self.state_arrays = []
+        self._cancelled = False
+
+    def cancel(self):
+        self._cancelled = True
+
+    def run(self):
+        for theta1, theta2, omega1, omega2 in self.ic_list:
+            if self._cancelled:
+                return
+            t, states = simulate(
+                self.params, theta1, theta2, omega1, omega2, self.t_end, self.dt,
+            )
+            if self.t_array is None:
+                self.t_array = t
+            self.state_arrays.append(states)
 
 
 # ---------------------------------------------------------------------------
@@ -457,12 +776,21 @@ class MainWindow(QMainWindow):
         self.status_bar.addWidget(self.energy_label)
         self.status_bar.addWidget(self.drift_label)
 
+        # Loading overlay (child of canvas so it covers the drawing area)
+        self.loading_overlay = LoadingOverlay(self.canvas)
+
         # Simulation state
         self.t_array = None
-        self.state_array = None
+        self.state_arrays = []  # list of (N, 4) arrays
         self.current_index = 0
         self.playing = False
         self.initial_energy = 0.0
+        self._sim_stale = True  # True when params changed but not yet simulated
+        self._sim_running = False
+        self._sim_params_changed = False
+        self._sim_on_complete = None
+        self._sim_worker = None
+        self._scrub_target = 0
 
         # Timer for animation
         self.timer = QTimer()
@@ -477,55 +805,153 @@ class MainWindow(QMainWindow):
         self.controls.timeline_slider.sliderPressed.connect(self._on_scrub_pressed)
         self.controls.axes_checkbox.toggled.connect(self._on_axes_toggled)
 
-        # Run initial simulation
-        self._run_simulation()
+        # Show initial state preview
+        self._update_preview()
 
     # -- Simulation --
 
-    def _run_simulation(self):
-        """(Re)compute the full trajectory with current parameters."""
-        was_playing = self.playing
-        if self.playing:
-            self._toggle_play()
+    def _generate_initial_conditions(self):
+        """Build list of IC tuples from center values, spreads, and counts."""
+        centers = self.controls.get_initial_conditions()
+        spread_counts = self.controls.get_spread_counts()
+        max_traj = self.controls.get_max_trajectories()
 
+        # Generate value arrays for each IC parameter
+        value_sets = []
+        for center, (spread, count) in zip(centers, spread_counts):
+            if count == 1:
+                value_sets.append([center])
+            else:
+                value_sets.append(
+                    list(np.linspace(center - spread / 2, center + spread / 2, count))
+                )
+
+        full_product = list(itertools.product(*value_sets))
+        total = len(full_product)
+
+        # Ensure center IC is always first
+        center_ic = tuple(centers)
+        if center_ic in full_product:
+            full_product.remove(center_ic)
+        full_product.insert(0, center_ic)
+
+        if total <= max_traj:
+            ic_list = full_product
+            sampled = False
+        else:
+            # Keep center (index 0), sample the rest
+            rest = full_product[1:]
+            sampled_rest = random.sample(rest, max_traj - 1)
+            ic_list = [full_product[0]] + sampled_rest
+            sampled = True
+
+        # Update trajectory count label
+        if sampled:
+            self.controls.trajectory_count_label.setText(
+                f"Trajectories: {max_traj} / {total} (sampled)"
+            )
+        else:
+            self.controls.trajectory_count_label.setText(
+                f"Trajectories: {total}"
+            )
+
+        return ic_list
+
+    def _update_preview(self):
+        """Show frame-0 positions from current ICs without running simulation."""
+        ic_list = self._generate_initial_conditions()
         params = self.controls.get_params()
-        theta1_0, theta2_0, omega1_0, omega2_0 = self.controls.get_initial_conditions()
-        t_end = self.controls.get_t_end()
 
-        self.t_array, self.state_array = simulate(
-            params, theta1_0, theta2_0, omega1_0, omega2_0, t_end, self.DT,
-        )
+        # Each IC tuple is already the state at t=0 (with omega values)
+        states_at_zero = [list(ic) for ic in ic_list]
 
         self.current_index = 0
-        self.canvas.clear_trail()
+        self.canvas.clear_trails()
+        self.canvas.show_velocity = True
+        self.canvas.set_states(states_at_zero, params, append_trail=False)
 
-        # Record initial energy for drift display
-        self.initial_energy = total_energy(self.state_array[0], params)
+        # Reset timeline (max=0 prevents scrubbing before simulation)
+        t_end = self.controls.get_t_end()
+        self.controls.timeline_slider.setMaximum(0)
+        self.controls.timeline_slider.setValue(0)
+        self.controls.timeline_label.setText(f"0.00 / {t_end:.2f} s")
 
-        # Update timeline slider range
+        # Energy at initial state
+        self.initial_energy = total_energy(states_at_zero[0], params)
+        energy = self.initial_energy
+        self.time_label.setText("  t = 0.000 s  ")
+        self.energy_label.setText(f"  E = {energy:.4f} J  ")
+        self.drift_label.setText("  \u0394E = +0.000000 J  ")
+
+        self._sim_stale = True
+
+    def _start_simulation(self, on_complete=None):
+        """Launch background simulation. Calls on_complete when done."""
+        if self._sim_running:
+            # Cancel previous run
+            if self._sim_worker:
+                self._sim_worker.cancel()
+            return
+
+        ic_list = self._generate_initial_conditions()
+        params = self.controls.get_params()
+        t_end = self.controls.get_t_end()
+
+        self._sim_on_complete = on_complete
+        self._sim_running = True
+        self._sim_params_changed = False
+
+        n = len(ic_list)
+        msg = f"Simulating {n} trajectory..." if n == 1 else f"Simulating {n} trajectories..."
+        self.controls.play_btn.setEnabled(False)
+        self.loading_overlay.start(msg)
+
+        self._sim_worker = SimWorker(params, ic_list, t_end, self.DT)
+        self._sim_worker.finished.connect(self._on_simulation_finished)
+        self._sim_worker.start()
+
+    def _on_simulation_finished(self):
+        """Handle completed (or cancelled) background simulation."""
+        self.loading_overlay.stop()
+        self.controls.play_btn.setEnabled(True)
+
+        worker = self._sim_worker
+        self._sim_worker = None
+        self._sim_running = False
+
+        if self._sim_params_changed or worker._cancelled:
+            return  # results outdated, discard
+
+        self.t_array = worker.t_array
+        self.state_arrays = worker.state_arrays
+        self.current_index = 0
+        self.canvas.clear_trails()
+
+        self.initial_energy = total_energy(self.state_arrays[0][0], self.controls.get_params())
         self.controls.timeline_slider.setMaximum(len(self.t_array) - 1)
         self.controls.timeline_slider.setValue(0)
 
-        self._update_display()
+        self._sim_stale = False
 
-        if was_playing:
-            self._toggle_play()
+        if self._sim_on_complete:
+            self._sim_on_complete()
 
     def _update_display(self):
         """Push current frame to the canvas and status bar."""
         params = self.controls.get_params()
-        state = self.state_array[self.current_index]
+        states_at_frame = [sa[self.current_index] for sa in self.state_arrays]
+        primary_state = states_at_frame[0]
         t = self.t_array[self.current_index]
         t_end = self.t_array[-1]
 
         self.canvas.show_velocity = (self.current_index == 0 and not self.playing)
-        self.canvas.set_state(state, params)
+        self.canvas.set_states(states_at_frame, params)
 
         # Timeline label
         self.controls.timeline_label.setText(f"{t:.2f} / {t_end:.2f} s")
 
-        # Status bar
-        energy = total_energy(state, params)
+        # Status bar (primary trajectory only)
+        energy = total_energy(primary_state, params)
         drift = energy - self.initial_energy
         self.time_label.setText(f"  t = {t:.3f} s  ")
         self.energy_label.setText(f"  E = {energy:.4f} J  ")
@@ -537,15 +963,23 @@ class MainWindow(QMainWindow):
 
     # -- Playback --
 
+    def _start_playback(self):
+        """Begin animation after simulation is ready."""
+        self.playing = True
+        self.timer.start()
+        self.controls.play_btn.setText("Pause")
+
     def _toggle_play(self):
+        if self._sim_running:
+            return  # simulation in progress, ignore
         if self.playing:
             self.playing = False
             self.timer.stop()
             self.controls.play_btn.setText("Play")
+        elif self._sim_stale:
+            self._start_simulation(on_complete=self._start_playback)
         else:
-            self.playing = True
-            self.timer.start()
-            self.controls.play_btn.setText("Pause")
+            self._start_playback()
 
     def _on_timer(self):
         """Advance the animation by the appropriate number of steps."""
@@ -564,8 +998,10 @@ class MainWindow(QMainWindow):
         self._update_display()
 
     def _reset(self):
-        """Re-run simulation with current parameters."""
-        self._run_simulation()
+        """Reset to initial state."""
+        if self.playing:
+            self._toggle_play()
+        self._update_preview()
 
     # -- Scrubbing --
 
@@ -576,14 +1012,28 @@ class MainWindow(QMainWindow):
 
     def _on_scrub(self, value):
         """Jump to the frame indicated by the timeline slider."""
+        if self._sim_stale:
+            self._scrub_target = value
+            self._start_simulation(on_complete=self._do_scrub)
+            return
+        self._do_scrub_to(value)
+
+    def _do_scrub(self):
+        """Callback after simulation finishes for a pending scrub."""
+        self._do_scrub_to(self._scrub_target)
+
+    def _do_scrub_to(self, value):
+        """Scrub to a specific frame (simulation must be ready)."""
         self.current_index = value
-        # Rebuild trail up to current position
-        self.canvas.clear_trail()
+        # Rebuild primary trail up to current position
+        self.canvas.clear_trails()
+        while len(self.canvas.trails) < len(self.state_arrays):
+            self.canvas.trails.append(deque(maxlen=PendulumCanvas.TRAIL_LENGTH))
         params = self.controls.get_params()
         trail_start = max(0, self.current_index - PendulumCanvas.TRAIL_LENGTH)
         for i in range(trail_start, self.current_index + 1):
-            _, _, x2, y2 = positions(self.state_array[i], params)
-            self.canvas.trail.append((x2, y2))
+            _, _, x2, y2 = positions(self.state_arrays[0][i], params)
+            self.canvas.trails[0].append((x2, y2))
         self._update_display()
 
     # -- Axes toggle --
@@ -596,4 +1046,10 @@ class MainWindow(QMainWindow):
 
     def _on_param_changed(self):
         """Called when any parameter or IC slider changes."""
-        self._run_simulation()
+        if self.playing:
+            self._toggle_play()
+        if self._sim_running:
+            self._sim_params_changed = True
+            if self._sim_worker:
+                self._sim_worker.cancel()
+        self._update_preview()
