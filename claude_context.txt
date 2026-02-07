@@ -1,0 +1,83 @@
+CHAOS PENDULUM — Claude Context File
+=====================================
+Last updated: 2026-02-06
+
+## Project Overview
+Interactive double pendulum simulator built with Python/PyQt6. Visualizes
+chaotic dynamics with multi-trajectory support to show sensitivity to
+initial conditions.
+
+## File Structure
+- main.py — Entry point, creates QApplication + MainWindow
+- simulation.py — Physics engine (Lagrangian EOM, DOP853 integrator)
+- visualization.py — All UI: PendulumCanvas, ControlPanel, LoadingOverlay,
+  SimWorker, MainWindow (~1050 lines)
+
+## Architecture
+
+### simulation.py
+- DoublePendulumParams dataclass (m1, m2, l1, l2, g)
+- derivatives() — 4 first-order ODEs from Lagrangian mechanics
+- simulate() — solve_ivp with DOP853, rtol/atol=1e-14, returns (t, states)
+- positions() — state -> (x1,y1,x2,y2) Cartesian coords
+- total_energy() — T+V for energy conservation checking
+
+### visualization.py classes
+
+**PendulumCanvas(QWidget)** — QPainter rendering
+- Multi-trajectory: self.states list, self.trails list, primary_index=0
+- Ghost pendulums: translucent full pendulums for secondary trajectories
+  with adaptive alpha (800/n, clamped 10-40)
+- Primary gets full rendering: arms, bobs, trail with alpha fadeout
+- Velocity arrows at frame 0 (omega decomposition + tangential projection)
+- Distance ring axes overlay (toggle)
+
+**ControlPanel(QWidget)** — All parameter sliders
+- IC sliders: theta1/2 (-pi..pi), omega1/2 (-10..10), resolution=100
+- Spread sliders: LOG SCALE via _make_log_slider(), range 1e-10 to max
+  Position 0 = exactly 0, positions 1-1000 = log from 1e-10 to 2pi/20
+- Count spinboxes: 1-100 per IC parameter
+- System params: m1/m2 (0.1-5kg), l1/l2 (0.1-3m)
+- Simulation group: duration slider, max trajectories spinbox (1-5000,
+  default 500), trajectory count label
+- get_spread_counts() returns [(spread, count), ...] using _log_slider_value
+
+**LoadingOverlay(QWidget)** — Saturn loading animation
+- Shown during background simulation, child of canvas
+- Saturn planet with cocked rings (20deg), two moons at different orbital
+  planes (big: tight/steep 50deg, small: wide/flat -5deg)
+- Planet wobbles from moon gravity, text bobs with 3x amplified wobble
+- Font: Chalkboard SE 16pt bold
+- Ring drawn as back arc -> planet body -> front arc for correct z-order
+
+**SimWorker(QThread)** — Background simulation
+- Runs simulate() for each IC set, cancellable between trajectories
+- finished signal triggers _on_simulation_finished in MainWindow
+
+**MainWindow(QMainWindow)** — Wiring
+- DEFERRED SIMULATION: param changes only call _update_preview() (shows
+  frame 0 from IC tuples, no integration). Simulation runs on Play/scrub.
+- _generate_initial_conditions(): linspace per param, itertools.product,
+  center IC always at index 0, random.sample if exceeding max_trajectories
+- _start_simulation(on_complete): async via SimWorker + LoadingOverlay
+- _on_simulation_finished(): stores results, calls on_complete callback
+- _sim_stale flag tracks whether params changed since last simulation
+- _sim_params_changed flag detects param changes during running simulation
+- Scrubbing triggers simulation if stale, rebuilds primary trail only
+- Energy/drift display uses primary trajectory (index 0) only
+
+## Key Design Decisions
+- Simulation is deferred (not on slider change) to keep UI responsive
+- Center IC always at state_arrays[0] so primary trajectory is deterministic
+- Ghost alpha scales inversely with trajectory count to prevent blowout
+- Log-scale spread sliders span 10 orders of magnitude (1e-10 to max)
+- DOP853 at 1e-14 tolerances pushes noise floor to ~1e-10
+
+## Uncommitted Changes
+- DOP853 + 1e-14 tolerances in simulation.py
+- Log-scale spread sliders in visualization.py
+- Fixed-width (80px) spread value labels to prevent layout twitching
+
+## Dependencies
+- PyQt6, numpy, scipy (see requirements.txt)
+- Python 3.9 (.venv in project root)

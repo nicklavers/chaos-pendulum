@@ -67,10 +67,10 @@ def simulate(params, theta1_0, theta2_0, omega1_0=0.0, omega2_0=0.0,
         fun=lambda t, y: derivatives(t, y, params),
         t_span=(0, t_end),
         y0=y0,
-        method="RK45",
+        method="DOP853",
         t_eval=t_eval,
-        rtol=1e-9,
-        atol=1e-9,
+        rtol=1e-14,
+        atol=1e-14,
     )
 
     return sol.t, sol.y.T  # shape: (n_steps, 4)

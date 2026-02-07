@@ -336,6 +336,34 @@ class ControlPanel(QWidget):
     def _slider_value(slider):
         return slider.value() / slider.resolution
 
+    def _make_log_slider(self, log_min, log_max, steps=1000):
+        """Create a slider with log mapping. Position 0 = 0, 1..steps = log scale."""
+        slider = QSlider(Qt.Orientation.Horizontal)
+        slider.setMinimum(0)
+        slider.setMaximum(steps)
+        slider.setValue(0)
+        slider.log_min = log_min
+        slider.log_max = log_max
+        slider.log_steps = steps
+        slider.is_log = True
+        return slider
+
+    @staticmethod
+    def _log_slider_value(slider):
+        pos = slider.value()
+        if pos == 0:
+            return 0.0
+        t = (pos - 1) / (slider.log_steps - 1)
+        return slider.log_min * (slider.log_max / slider.log_min) ** t
+
+    @staticmethod
+    def _format_spread(value, unit):
+        if value == 0:
+            return f"0{unit}"
+        if value < 0.01:
+            return f"{value:.1e}{unit}"
+        return f"{value:.3f}{unit}"
+
     def _add_param_row(self, layout, row, label_text, slider, unit=""):
         label = QLabel(label_text)
         value_label = QLabel()
@@ -359,7 +387,7 @@ class ControlPanel(QWidget):
         spread_label = QLabel("  spread")
         spread_label.setStyleSheet("color: #888;")
         spread_value = QLabel()
-        spread_value.setMinimumWidth(55)
+        spread_value.setFixedWidth(80)
         spread_value.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
 
         n_label = QLabel("n=")
@@ -372,7 +400,11 @@ class ControlPanel(QWidget):
         layout.addWidget(count_spinbox, row, 4)
 
         def _update_spread(val, vl=spread_value, sl=spread_slider, u=unit):
-            vl.setText(f"{self._slider_value(sl):.2f}{u}")
+            if getattr(sl, 'is_log', False):
+                v = self._log_slider_value(sl)
+            else:
+                v = self._slider_value(sl)
+            vl.setText(self._format_spread(v, u))
             if not self._building:
                 self._on_param_changed()
 
@@ -401,11 +433,11 @@ class ControlPanel(QWidget):
         self.omega1_slider = self._make_slider(-10, 10, 0)
         self.omega2_slider = self._make_slider(-10, 10, 0)
 
-        # Spread sliders (range 0 to full range of parent)
-        self.theta1_spread = self._make_slider(0, 2 * math.pi, 0)
-        self.theta2_spread = self._make_slider(0, 2 * math.pi, 0)
-        self.omega1_spread = self._make_slider(0, 20, 0)
-        self.omega2_spread = self._make_slider(0, 20, 0)
+        # Spread sliders (log scale: 0 then 1e-10 .. max)
+        self.theta1_spread = self._make_log_slider(1e-10, 2 * math.pi)
+        self.theta2_spread = self._make_log_slider(1e-10, 2 * math.pi)
+        self.omega1_spread = self._make_log_slider(1e-10, 20)
+        self.omega2_spread = self._make_log_slider(1e-10, 20)
 
         # Count spinboxes
         self.theta1_count = QSpinBox(); self.theta1_count.setRange(1, 100); self.theta1_count.setValue(1)
@@ -529,10 +561,10 @@ class ControlPanel(QWidget):
     def get_spread_counts(self):
         """Return list of (spread, count) for each IC: theta1, theta2, omega1, omega2."""
         return [
-            (self._slider_value(self.theta1_spread), self.theta1_count.value()),
-            (self._slider_value(self.theta2_spread), self.theta2_count.value()),
-            (self._slider_value(self.omega1_spread), self.omega1_count.value()),
-            (self._slider_value(self.omega2_spread), self.omega2_count.value()),
+            (self._log_slider_value(self.theta1_spread), self.theta1_count.value()),
+            (self._log_slider_value(self.theta2_spread), self.theta2_count.value()),
+            (self._log_slider_value(self.omega1_spread), self.omega1_count.value()),
+            (self._log_slider_value(self.omega2_spread), self.omega2_count.value()),
         ]
 
     def get_max_trajectories(self):
