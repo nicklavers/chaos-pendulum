@@ -1,0 +1,353 @@
+"""Fractal view: orchestrates canvas, controls, worker, and cache.
+
+This is the main coordinator for fractal mode. It:
+- Listens to viewport changes from the canvas
+- Checks the cache for existing results
+- Launches FractalWorker for cache misses
+- Feeds completed data to the canvas for display
+"""
+
+from __future__ import annotations
+
+import logging
+
+import numpy as np
+from PyQt6.QtCore import Qt
+from PyQt6.QtWidgets import QWidget, QHBoxLayout, QSplitter
+
+from simulation import DoublePendulumParams
+from fractal.canvas import FractalCanvas
+from fractal.controls import FractalControls
+from fractal.cache import FractalCache, CacheKey
+from fractal.compute import (
+    FractalViewport, FractalTask,
+    get_default_backend, get_progressive_levels, DEFAULT_N_SAMPLES,
+)
+from fractal.coloring import interpolate_angle
+from fractal.worker import FractalWorker
+from ui_common import LoadingOverlay
+
+logger = logging.getLogger(__name__)
+
+# Default RK4 step size
+DEFAULT_DT = 0.01
+
+
+class FractalView(QWidget):
+    """Complete fractal mode: canvas + controls + compute orchestration."""
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+
+        # Backend
+        self._backend = get_default_backend()
+        self._progressive_levels = get_progressive_levels(self._backend)
+
+        # Cache (adaptive budget based on backend)
+        backend_name = type(self._backend).__name__
+        if backend_name == "JaxBackend":
+            cache_budget = 64 * 1024 * 1024
+        elif backend_name == "NumbaBackend":
+            cache_budget = 128 * 1024 * 1024
+        else:
+            cache_budget = 512 * 1024 * 1024
+        self._cache = FractalCache(max_bytes=cache_budget)
+
+        # UI
+        self.canvas = FractalCanvas()
+        self.controls = FractalControls()
+
+        splitter = QSplitter(Qt.Orientation.Horizontal)
+        splitter.addWidget(self.canvas)
+        splitter.addWidget(self.controls)
+        splitter.setStretchFactor(0, 3)
+        splitter.setStretchFactor(1, 2)
+
+        layout = QHBoxLayout(self)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.addWidget(splitter)
+
+        # Loading overlay
+        self.loading_overlay = LoadingOverlay(self.canvas)
+
+        # Worker state
+        self._worker: FractalWorker | None = None
+        self._retiring_workers: list[FractalWorker] = []
+        self._current_params: DoublePendulumParams | None = None
+
+        # Status labels (AppWindow will read these)
+        self._status_text = ""
+
+        # Wire signals
+        self.canvas.viewport_changed.connect(self._on_viewport_changed)
+        self.controls.time_index_changed.connect(self._on_time_index_changed)
+        self.controls.colormap_changed.connect(self._on_colormap_changed)
+        self.controls.angle_selection_changed.connect(self._on_angle_changed)
+        self.controls.resolution_changed.connect(self._on_resolution_changed)
+        self.controls.physics_changed.connect(self._on_physics_changed)
+        self.controls.t_end_changed.connect(self._on_t_end_changed)
+        self.controls.zoom_out_clicked.connect(self._on_zoom_out)
+        self.controls.tool_mode_changed.connect(self.canvas.set_tool_mode)
+        self.canvas.hover_updated.connect(self._on_hover_updated)
+
+    # -- Public interface for mode switching --
+
+    def activate(
+        self,
+        params: DoublePendulumParams | None = None,
+        center_theta1: float = 0.0,
+        center_theta2: float = 0.0,
+    ) -> None:
+        """Called when switching to fractal mode."""
+        if params is not None:
+            self.controls.set_params(params)
+            self._current_params = params
+
+        self.canvas.set_viewport(center_theta1, center_theta2)
+
+        # Trigger initial computation
+        viewport = self.canvas.get_viewport()
+        self._start_computation(viewport)
+
+    def deactivate(self) -> None:
+        """Called when switching away from fractal mode."""
+        self._cancel_worker()
+        # Wait for all retiring workers to finish (blocking, but
+        # only happens on mode switch so a brief freeze is acceptable)
+        for worker in self._retiring_workers:
+            worker.wait(3000)
+        self._retiring_workers.clear()
+
+    def get_params(self) -> DoublePendulumParams:
+        return self.controls.get_params()
+
+    # -- Computation pipeline --
+
+    def _start_computation(self, viewport: FractalViewport) -> None:
+        """Start the progressive computation pipeline for a viewport."""
+        params = self.controls.get_params()
+        self._current_params = params
+
+        # Check cache for the full-resolution result
+        full_key = CacheKey.from_viewport(viewport, params)
+        cached = self._cache.get(full_key)
+        if cached is not None:
+            logger.debug("Cache hit for %s", full_key)
+            self.canvas.display(cached, self.controls.get_time_index())
+            return
+
+        # Cache miss: start progressive pipeline
+        self._cancel_worker()
+
+        # Update canvas resolution
+        self.canvas.set_resolution(viewport.resolution)
+
+        task = FractalTask(
+            params=params,
+            viewport=viewport,
+            t_end=self.controls.get_t_end(),
+            dt=DEFAULT_DT,
+            n_samples=DEFAULT_N_SAMPLES,
+        )
+
+        self._worker = FractalWorker(task, self._backend, self._progressive_levels)
+        self._worker.level_complete.connect(self._on_level_complete)
+        self._worker.progress.connect(self._on_progress)
+        self._worker.all_complete.connect(self._on_all_complete)
+        self._worker.finished.connect(self._on_worker_finished)
+
+        self.loading_overlay.start("Computing fractal...")
+        self._worker.start()
+
+    def _cancel_worker(self) -> None:
+        """Cancel any running worker.
+
+        Moves the old worker to a retirement list so it won't be
+        garbage-collected while the thread is still running. The worker
+        cleans itself up via its finished signal.
+        """
+        if self._worker is None:
+            return
+
+        old_worker = self._worker
+        self._worker = None
+
+        # Disconnect signals so stale results don't arrive
+        try:
+            old_worker.level_complete.disconnect(self._on_level_complete)
+            old_worker.progress.disconnect(self._on_progress)
+            old_worker.all_complete.disconnect(self._on_all_complete)
+            old_worker.finished.disconnect(self._on_worker_finished)
+        except TypeError:
+            pass  # Already disconnected
+
+        if old_worker.isRunning():
+            old_worker.cancel()
+            # Keep a reference so the QThread isn't destroyed while running
+            self._retiring_workers.append(old_worker)
+            old_worker.finished.connect(lambda w=old_worker: self._cleanup_retired(w))
+
+    def _cleanup_retired(self, worker: FractalWorker) -> None:
+        """Remove a retired worker after its thread has fully stopped."""
+        try:
+            self._retiring_workers.remove(worker)
+        except ValueError:
+            pass  # Already removed
+        logger.debug(
+            "Retired worker cleaned up, %d still retiring",
+            len(self._retiring_workers),
+        )
+
+    # -- Worker signal handlers --
+
+    def _on_level_complete(self, resolution: int, snapshots: np.ndarray) -> None:
+        """Handle a completed progressive level."""
+        params = self.controls.get_params()
+        viewport = self.canvas.get_viewport()
+
+        # Build a viewport at this resolution for caching
+        level_viewport = FractalViewport(
+            center_theta1=viewport.center_theta1,
+            center_theta2=viewport.center_theta2,
+            span_theta1=viewport.span_theta1,
+            span_theta2=viewport.span_theta2,
+            resolution=resolution,
+        )
+        key = CacheKey.from_viewport(level_viewport, params)
+        self._cache.put(key, snapshots)
+
+        # Display this level
+        self.canvas.display(snapshots, self.controls.get_time_index())
+
+        logger.debug(
+            "Level %dx%d complete, cache: %.1f MB",
+            resolution, resolution, self._cache.memory_used_mb,
+        )
+
+    def _on_progress(self, steps_done: int, total_steps: int) -> None:
+        """Update loading overlay with progress."""
+        if total_steps > 0:
+            pct = int(100 * steps_done / total_steps)
+            self.loading_overlay.message = f"Computing fractal... {pct}%"
+
+    def _on_all_complete(self) -> None:
+        """All progressive levels finished."""
+        self.loading_overlay.stop()
+        self.canvas.activate_pending_ghost()
+
+    def _on_worker_finished(self) -> None:
+        """Worker thread has exited (may be due to cancellation)."""
+        self.loading_overlay.stop()
+        # Only clear reference if this is still the current worker.
+        # Retired workers are cleaned up via _cleanup_retired.
+        sender = self.sender()
+        if sender is self._worker:
+            self._worker = None
+
+    # -- UI signal handlers --
+
+    def _on_viewport_changed(self, viewport: FractalViewport) -> None:
+        """Canvas emitted a new viewport (rectangle zoom or zoom-out)."""
+        self._start_computation(viewport)
+
+    def _on_zoom_out(self) -> None:
+        """Zoom out button clicked: delegate to the canvas."""
+        self.canvas.zoom_out()
+
+    def _on_time_index_changed(self, time_index: float) -> None:
+        """Time slider moved: update display from current snapshots."""
+        self.canvas.set_time_index(time_index)
+        self.controls.update_time_label(self.controls.get_t_end())
+
+    def _on_colormap_changed(self, name: str) -> None:
+        """Colormap dropdown changed."""
+        self.canvas.set_colormap(name)
+
+    def _on_angle_changed(self, angle_index: int) -> None:
+        """Angle display selection changed."""
+        self.canvas.set_angle_index(angle_index)
+
+    def _on_resolution_changed(self, resolution: int) -> None:
+        """Resolution dropdown changed: recompute at new resolution."""
+        self.canvas.set_resolution(resolution)
+        # Update progressive levels for the new max resolution
+        self._progressive_levels = [
+            lev for lev in get_progressive_levels(self._backend)
+            if lev <= resolution
+        ]
+        if resolution not in self._progressive_levels:
+            self._progressive_levels.append(resolution)
+        viewport = self.canvas.get_viewport()
+        new_viewport = FractalViewport(
+            center_theta1=viewport.center_theta1,
+            center_theta2=viewport.center_theta2,
+            span_theta1=viewport.span_theta1,
+            span_theta2=viewport.span_theta2,
+            resolution=resolution,
+        )
+        self._start_computation(new_viewport)
+
+    def _on_physics_changed(self) -> None:
+        """Physics parameters changed: invalidate cache and recompute."""
+        old_params = self._current_params
+        new_params = self.controls.get_params()
+
+        if old_params is not None:
+            from fractal.cache import _params_hash
+            self._cache.invalidate_params(_params_hash(old_params))
+
+        self._current_params = new_params
+        viewport = self.canvas.get_viewport()
+        self._start_computation(viewport)
+
+    def _on_t_end_changed(self) -> None:
+        """Simulation duration changed: invalidate all cache and recompute."""
+        self._cache.clear()
+        viewport = self.canvas.get_viewport()
+        self._start_computation(viewport)
+
+    def _on_hover_updated(self, theta1: float, theta2: float) -> None:
+        """Inspect tool: look up pendulum states and update diagrams."""
+        snapshots = self.canvas._current_snapshots
+        if snapshots is None:
+            return
+
+        viewport = self.canvas.get_viewport()
+        res = int(np.sqrt(snapshots.shape[0]))
+
+        # Convert hovered physics coords to grid indices
+        half_span1 = viewport.span_theta1 / 2
+        half_span2 = viewport.span_theta2 / 2
+        vmin1 = viewport.center_theta1 - half_span1
+        vmin2 = viewport.center_theta2 - half_span2
+
+        nx = (theta1 - vmin1) / viewport.span_theta1
+        ny = (theta2 - vmin2) / viewport.span_theta2
+
+        col = int(max(0, min(res - 1, round(nx * (res - 1)))))
+        row = int(max(0, min(res - 1, round(ny * (res - 1)))))
+        flat_idx = row * res + col
+
+        # Look up angles at current time
+        time_index = self.controls.get_time_index()
+        theta1_at_t = float(
+            interpolate_angle(snapshots[:, 0, :], time_index)[flat_idx]
+        )
+        theta2_at_t = float(
+            interpolate_angle(snapshots[:, 1, :], time_index)[flat_idx]
+        )
+
+        # Compute t_value from slider position
+        t_end = self.controls.get_t_end()
+        slider_val = self.controls.time_slider.value()
+        slider_max = max(1, self.controls.time_slider.maximum())
+        t_value = (slider_val / slider_max) * t_end
+
+        # Update the inspect panel
+        params = self.controls.get_params()
+        self.controls.set_inspect_params(params)
+        self.controls.update_inspect(
+            theta1, theta2,
+            theta1_at_t, theta2_at_t,
+            t_value,
+        )

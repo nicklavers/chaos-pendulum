@@ -1,0 +1,384 @@
+"""Fractal controls: time slider, animation, colormap, resolution, physics params.
+
+All controls for the fractal explorer mode, organized in grouped sections.
+"""
+
+import math
+
+from PyQt6.QtCore import Qt, QTimer, pyqtSignal
+from PyQt6.QtWidgets import (
+    QWidget, QVBoxLayout, QHBoxLayout, QGridLayout,
+    QSlider, QLabel, QPushButton, QComboBox, QGroupBox,
+    QButtonGroup,
+)
+
+from fractal.compute import DEFAULT_N_SAMPLES
+from fractal.coloring import COLORMAPS
+from fractal.pendulum_diagram import PendulumDiagram
+from ui_common import PhysicsParamsWidget
+
+
+class FractalControls(QWidget):
+    """Control panel for the fractal explorer mode."""
+
+    # Signals
+    time_index_changed = pyqtSignal(float)
+    colormap_changed = pyqtSignal(str)
+    resolution_changed = pyqtSignal(int)
+    physics_changed = pyqtSignal()
+    t_end_changed = pyqtSignal()
+    zoom_out_clicked = pyqtSignal()
+    tool_mode_changed = pyqtSignal(str)  # "zoom", "pan", or "inspect"
+    angle_selection_changed = pyqtSignal(int)  # 0 = theta1, 1 = theta2
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self._building = True
+        self._init_ui()
+        self._building = False
+
+    def _init_ui(self):
+        main_layout = QVBoxLayout(self)
+        main_layout.setContentsMargins(8, 8, 8, 8)
+
+        # --- Time Slider ---
+        time_group = QGroupBox("Time")
+        time_layout = QVBoxLayout()
+        time_group.setLayout(time_layout)
+
+        self.time_slider = QSlider(Qt.Orientation.Horizontal)
+        self.time_slider.setMinimum(0)
+        self.time_slider.setMaximum((DEFAULT_N_SAMPLES - 1) * 10)  # 10x for smooth scrub
+        self.time_slider.setValue(0)
+        self.time_slider.setTickPosition(QSlider.TickPosition.NoTicks)
+
+        self.time_label = QLabel("t = 0.0 s")
+
+        # Animation controls
+        anim_layout = QHBoxLayout()
+        self.play_btn = QPushButton("Play")
+        self.play_btn.setCheckable(True)
+        self.speed_combo = QComboBox()
+        for s in ["0.5x", "1x", "2x", "4x"]:
+            self.speed_combo.addItem(s)
+        self.speed_combo.setCurrentIndex(1)  # default 1x
+
+        anim_layout.addWidget(self.play_btn)
+        anim_layout.addWidget(QLabel("Speed:"))
+        anim_layout.addWidget(self.speed_combo)
+        anim_layout.addStretch()
+
+        time_layout.addWidget(self.time_slider)
+        time_layout.addWidget(self.time_label)
+        time_layout.addLayout(anim_layout)
+
+        main_layout.addWidget(time_group)
+
+        # --- Navigation ---
+        nav_group = QGroupBox("Navigation")
+        nav_layout = QVBoxLayout()
+        nav_group.setLayout(nav_layout)
+
+        # Tool mode toggle
+        tool_row = QHBoxLayout()
+
+        self.zoom_tool_btn = QPushButton("Zoom")
+        self.zoom_tool_btn.setCheckable(True)
+        self.zoom_tool_btn.setChecked(True)
+
+        self.pan_tool_btn = QPushButton("Pan")
+        self.pan_tool_btn.setCheckable(True)
+
+        self.inspect_tool_btn = QPushButton("Inspect")
+        self.inspect_tool_btn.setCheckable(True)
+
+        self._tool_group = QButtonGroup(self)
+        self._tool_group.setExclusive(True)
+        self._tool_group.addButton(self.zoom_tool_btn)
+        self._tool_group.addButton(self.pan_tool_btn)
+        self._tool_group.addButton(self.inspect_tool_btn)
+
+        tool_row.addWidget(self.zoom_tool_btn)
+        tool_row.addWidget(self.pan_tool_btn)
+        tool_row.addWidget(self.inspect_tool_btn)
+        tool_row.addStretch()
+
+        self.zoom_out_btn = QPushButton("Zoom Out (2\u00d7)")
+        tool_row.addWidget(self.zoom_out_btn)
+
+        nav_layout.addLayout(tool_row)
+
+        self.nav_hint = QLabel("Drag to zoom in")
+        self.nav_hint.setStyleSheet(
+            "color: #888; font-style: italic; font-size: 11px;"
+        )
+        nav_layout.addWidget(self.nav_hint)
+
+        main_layout.addWidget(nav_group)
+
+        # --- Inspect Panel (hidden by default) ---
+        self.inspect_group = QGroupBox("Inspect")
+        inspect_layout = QVBoxLayout()
+        self.inspect_group.setLayout(inspect_layout)
+
+        diagrams_layout = QHBoxLayout()
+
+        # Left: initial state diagram
+        initial_col = QVBoxLayout()
+        self._initial_diagram = PendulumDiagram()
+        self._initial_diagram.set_label("Initial (t=0)")
+        initial_col.addWidget(self._initial_diagram)
+        self._initial_angles_label = QLabel(
+            "\u03b8\u2081=\u2014, \u03b8\u2082=\u2014"
+        )
+        self._initial_angles_label.setStyleSheet(
+            "color: #aaa; font-size: 11px;"
+        )
+        self._initial_angles_label.setAlignment(
+            Qt.AlignmentFlag.AlignCenter
+        )
+        initial_col.addWidget(self._initial_angles_label)
+
+        # Right: state at time t diagram
+        at_t_col = QVBoxLayout()
+        self._at_t_diagram = PendulumDiagram()
+        self._at_t_diagram.set_label("At t = 0.0 s")
+        at_t_col.addWidget(self._at_t_diagram)
+        self._at_t_angles_label = QLabel(
+            "\u03b8\u2081=\u2014, \u03b8\u2082=\u2014"
+        )
+        self._at_t_angles_label.setStyleSheet(
+            "color: #aaa; font-size: 11px;"
+        )
+        self._at_t_angles_label.setAlignment(
+            Qt.AlignmentFlag.AlignCenter
+        )
+        at_t_col.addWidget(self._at_t_angles_label)
+
+        diagrams_layout.addLayout(initial_col)
+        diagrams_layout.addLayout(at_t_col)
+        inspect_layout.addLayout(diagrams_layout)
+
+        self.inspect_group.setVisible(False)
+        main_layout.addWidget(self.inspect_group)
+
+        # --- Display ---
+        display_group = QGroupBox("Display")
+        display_layout = QGridLayout()
+        display_group.setLayout(display_layout)
+
+        display_layout.addWidget(QLabel("Colormap:"), 0, 0)
+        self.colormap_combo = QComboBox()
+        for name in COLORMAPS:
+            self.colormap_combo.addItem(name)
+        display_layout.addWidget(self.colormap_combo, 0, 1)
+
+        display_layout.addWidget(QLabel("Display angle:"), 1, 0)
+        self.angle_combo = QComboBox()
+        self.angle_combo.addItem("\u03b8\u2082 (bob 2)", 1)
+        self.angle_combo.addItem("\u03b8\u2081 (bob 1)", 0)
+        display_layout.addWidget(self.angle_combo, 1, 1)
+
+        display_layout.addWidget(QLabel("Resolution:"), 2, 0)
+        self.resolution_combo = QComboBox()
+        for res in [64, 128, 256, 512]:
+            self.resolution_combo.addItem(f"{res}x{res}", res)
+        self.resolution_combo.setCurrentIndex(2)  # default 256x256
+        display_layout.addWidget(self.resolution_combo, 2, 1)
+
+        main_layout.addWidget(display_group)
+
+        # --- Simulation ---
+        sim_group = QGroupBox("Simulation")
+        sim_layout = QGridLayout()
+        sim_group.setLayout(sim_layout)
+
+        sim_layout.addWidget(QLabel("Duration:"), 0, 0)
+        self.t_end_slider = QSlider(Qt.Orientation.Horizontal)
+        self.t_end_slider.setMinimum(5)
+        self.t_end_slider.setMaximum(60)
+        self.t_end_slider.setValue(30)
+        self.t_end_label = QLabel("30 s")
+        sim_layout.addWidget(self.t_end_slider, 0, 1)
+        sim_layout.addWidget(self.t_end_label, 0, 2)
+
+        main_layout.addWidget(sim_group)
+
+        # --- Physics Parameters (collapsed) ---
+        physics_group = QGroupBox("Physics Parameters")
+        physics_layout = QVBoxLayout()
+        physics_group.setLayout(physics_layout)
+
+        self.physics_warning = QLabel(
+            "Changing physics will recompute the fractal"
+        )
+        self.physics_warning.setStyleSheet(
+            "color: #888; font-style: italic; font-size: 11px;"
+        )
+        physics_layout.addWidget(self.physics_warning)
+
+        self.physics_params = PhysicsParamsWidget()
+        physics_layout.addWidget(self.physics_params)
+
+        main_layout.addWidget(physics_group)
+        main_layout.addStretch()
+
+        # --- Wire signals ---
+        self.time_slider.valueChanged.connect(self._on_time_slider_changed)
+        self.colormap_combo.currentTextChanged.connect(self._on_colormap_changed)
+        self.angle_combo.currentIndexChanged.connect(self._on_angle_changed)
+        self.resolution_combo.currentIndexChanged.connect(self._on_resolution_changed)
+        self.t_end_slider.valueChanged.connect(self._on_t_end_changed)
+
+        # Physics param changes
+        for sl in [
+            self.physics_params.m1_slider,
+            self.physics_params.m2_slider,
+            self.physics_params.l1_slider,
+            self.physics_params.l2_slider,
+        ]:
+            sl.valueChanged.connect(self._on_physics_changed)
+
+        # Tool mode toggle
+        self._tool_group.buttonClicked.connect(self._on_tool_changed)
+
+        # Zoom out button
+        self.zoom_out_btn.clicked.connect(self._on_zoom_out_clicked)
+
+        # Animation timer
+        self._anim_timer = QTimer()
+        self._anim_timer.setInterval(33)  # ~30 fps for animation
+        self._anim_timer.timeout.connect(self._on_anim_tick)
+        self.play_btn.toggled.connect(self._on_play_toggled)
+
+    # -- Public accessors --
+
+    def get_time_index(self) -> float:
+        """Return the current time index as a float in [0, n_samples-1]."""
+        return self.time_slider.value() / 10.0
+
+    def get_t_end(self) -> float:
+        return float(self.t_end_slider.value())
+
+    def get_angle_index(self) -> int:
+        """Return the currently selected angle index (0=theta1, 1=theta2)."""
+        return self.angle_combo.currentData()
+
+    def get_resolution(self) -> int:
+        return self.resolution_combo.currentData()
+
+    def get_params(self):
+        return self.physics_params.get_params()
+
+    def set_params(self, params):
+        self.physics_params.set_params(params)
+
+    def get_speed(self) -> float:
+        text = self.speed_combo.currentText().replace("x", "")
+        return float(text)
+
+    def update_inspect(
+        self,
+        theta1_init: float,
+        theta2_init: float,
+        theta1_at_t: float,
+        theta2_at_t: float,
+        t_value: float,
+    ) -> None:
+        """Update both inspect diagrams and angle labels."""
+        self._initial_diagram.set_state(theta1_init, theta2_init)
+        self._initial_angles_label.setText(
+            f"\u03b8\u2081={math.degrees(theta1_init):.1f}\u00b0, "
+            f"\u03b8\u2082={math.degrees(theta2_init):.1f}\u00b0"
+        )
+
+        self._at_t_diagram.set_state(theta1_at_t, theta2_at_t)
+        self._at_t_diagram.set_label(f"At t = {t_value:.1f} s")
+        self._at_t_angles_label.setText(
+            f"\u03b8\u2081={math.degrees(theta1_at_t):.1f}\u00b0, "
+            f"\u03b8\u2082={math.degrees(theta2_at_t):.1f}\u00b0"
+        )
+
+    def set_inspect_params(self, params) -> None:
+        """Update physics params on both inspect diagrams."""
+        self._initial_diagram.set_params(params)
+        self._at_t_diagram.set_params(params)
+
+    def update_time_label(self, t_end: float) -> None:
+        """Update the time label based on current slider position."""
+        frac = self.time_slider.value() / max(1, self.time_slider.maximum())
+        t = frac * t_end
+        self.time_label.setText(f"t = {t:.1f} s")
+
+    # -- Callbacks --
+
+    def _on_time_slider_changed(self, value):
+        time_index = value / 10.0
+        self.time_index_changed.emit(time_index)
+        t_end = self.get_t_end()
+        self.update_time_label(t_end)
+
+        # Scrubbing pauses animation
+        if self.play_btn.isChecked() and self.time_slider.isSliderDown():
+            self._anim_timer.stop()
+
+    def _on_colormap_changed(self, name):
+        if not self._building:
+            self.colormap_changed.emit(name)
+
+    def _on_angle_changed(self, _index):
+        if not self._building:
+            self.angle_selection_changed.emit(self.angle_combo.currentData())
+
+    def _on_resolution_changed(self, _index):
+        if not self._building:
+            self.resolution_changed.emit(self.get_resolution())
+
+    def _on_physics_changed(self, _value):
+        if not self._building:
+            self.physics_changed.emit()
+
+    def _on_tool_changed(self, button):
+        if button is self.zoom_tool_btn:
+            self.tool_mode_changed.emit("zoom")
+            self.nav_hint.setText("Drag to zoom in")
+            self.inspect_group.setVisible(False)
+        elif button is self.pan_tool_btn:
+            self.tool_mode_changed.emit("pan")
+            self.nav_hint.setText("Drag to pan")
+            self.inspect_group.setVisible(False)
+        elif button is self.inspect_tool_btn:
+            self.tool_mode_changed.emit("inspect")
+            self.nav_hint.setText("Hover to inspect")
+            self.inspect_group.setVisible(True)
+
+    def _on_zoom_out_clicked(self):
+        self.zoom_out_clicked.emit()
+
+    def _on_t_end_changed(self, value):
+        self.t_end_label.setText(f"{value} s")
+        if not self._building:
+            self.t_end_changed.emit()
+
+    # -- Animation --
+
+    def _on_play_toggled(self, checked):
+        if checked:
+            self.play_btn.setText("Pause")
+            self._anim_timer.start()
+        else:
+            self.play_btn.setText("Play")
+            self._anim_timer.stop()
+
+    def _on_anim_tick(self):
+        """Advance time slider by speed-adjusted increment."""
+        speed = self.get_speed()
+        # Advance by speed * 1 sample per ~1 second of real time
+        # At 30fps timer, each tick is ~33ms = 0.033s
+        increment = speed * 0.033 * 10  # 10 = slider resolution factor
+        new_val = self.time_slider.value() + int(max(1, increment))
+
+        if new_val > self.time_slider.maximum():
+            new_val = 0  # loop
+
+        self.time_slider.setValue(new_val)
