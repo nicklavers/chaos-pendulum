@@ -164,14 +164,16 @@ at half-pi points.
 
 File: `fractal/winding.py` (~273 lines).
 
-Used in basin mode. Maps final unwrapped angles to integer winding numbers,
-then to BGRA pixels via basin-specific colormaps.
+Used in basin mode. The basin solver (`fractal/basin_solver.py`) returns
+`BasinResult(final_state: (N, 4))` — only the final state of each trajectory.
+The view extracts theta1/theta2 columns and passes them to the canvas, which
+maps final unwrapped angles to integer winding numbers, then to BGRA pixels.
 
 ```
-snapshots[:, 0, -1]   (N,) theta1 final
-snapshots[:, 1, -1]   (N,) theta2 final
-    |                    |
-    v                    v
+BasinResult.final_state[:, 0]   (N,) theta1 final
+BasinResult.final_state[:, 1]   (N,) theta2 final
+    |                              |
+    v                              v
 extract_winding_numbers()
     |                    |
     v                    v

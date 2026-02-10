@@ -7,7 +7,7 @@ import pytest
 
 from simulation import DoublePendulumParams
 from fractal.compute import (
-    FractalViewport, FractalTask, DEFAULT_N_SAMPLES, BatchResult,
+    FractalViewport, FractalTask, DEFAULT_N_SAMPLES, BatchResult, BasinResult,
     build_initial_conditions, get_default_backend, get_progressive_levels,
     saddle_energy,
 )
@@ -166,6 +166,30 @@ class TestBatchResult:
         result = BatchResult(snaps, vels)
         with pytest.raises(AttributeError):
             result.snapshots = np.zeros((4, 2, 10), dtype=np.float32)
+
+
+class TestBasinResult:
+    """Test BasinResult NamedTuple."""
+
+    def test_field_access(self):
+        """Should provide named field access."""
+        state = np.zeros((16, 4), dtype=np.float32)
+        result = BasinResult(state)
+        assert result.final_state is state
+
+    def test_tuple_unpacking(self):
+        """Should support tuple unpacking."""
+        state = np.ones((16, 4), dtype=np.float32)
+        result = BasinResult(state)
+        (s,) = result
+        assert np.array_equal(s, state)
+
+    def test_immutable(self):
+        """NamedTuple fields should be read-only."""
+        state = np.zeros((16, 4), dtype=np.float32)
+        result = BasinResult(state)
+        with pytest.raises(AttributeError):
+            result.final_state = np.zeros((16, 4), dtype=np.float32)
 
 
 class TestSaddleEnergy:

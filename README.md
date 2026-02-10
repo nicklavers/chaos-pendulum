@@ -27,7 +27,7 @@ Visualize how pendulum behavior varies across a grid of initial conditions. Each
 - **Angle mode** (default): scrub through time to see how each trajectory evolves
   - **Bivariate display**: colors both angles simultaneously using torus colormaps that respect the 2pi-periodic topology of the state space
   - **Univariate display**: colors a single angle via 1D LUT colormaps (HSV hue wheel, Twilight)
-- **Basin mode**: adds friction to damp trajectories, then maps each pixel to its final winding number (how many full rotations each arm completed). Energy-based early termination freezes trajectories that can never change basin, significantly speeding up computation.
+- **Basin mode**: adds friction to damp trajectories, then maps each pixel to its final winding number (how many full rotations each arm completed). Uses adaptive DOP853 integration with energy-based early termination (trajectories that can never change basin are stopped immediately).
 - Pan, zoom, and scrub through time with smooth animation
 - Inspect tool: hover over any pixel to see the pendulum configuration at that initial condition
 - Progressive rendering at multiple resolution levels (64, 128, 256, 512)
@@ -146,7 +146,8 @@ where `delta = theta1 - theta2` and `alpha` denotes angular acceleration.
 The coupled second-order ODEs are rewritten as four first-order ODEs by introducing omega1 and omega2 as independent state variables.
 
 - **Pendulum mode**: integrated using SciPy's `solve_ivp` with the DOP853 (8th-order Dormand-Prince) adaptive step-size method.
-- **Fractal mode**: uses a custom vectorized RK4 integrator that advances thousands of trajectories in parallel via NumPy broadcasting. An optional Numba JIT backend provides ~5x additional speedup.
+- **Fractal mode (angle)**: uses a custom vectorized RK4 integrator that advances thousands of trajectories in parallel via NumPy broadcasting. An optional Numba JIT backend provides ~5x additional speedup.
+- **Fractal mode (basin)**: each trajectory is integrated independently using DOP853 (adaptive step), storing only the final state. Energy-based event termination stops trajectories early when they can never change basin.
 
 ### Friction (viscous damping)
 
@@ -176,15 +177,16 @@ chaos-pendulum/
         view.py              FractalView: orchestration, signal wiring
         bivariate.py         Torus colormaps for dual-angle display
         coloring.py          Univariate coloring (HSV LUT, angle-to-ARGB)
-        compute.py           ComputeBackend protocol, BatchResult, saddle energy
-        _numpy_backend.py    Vectorized NumPy RK4 (+ energy freeze logic)
-        _numba_backend.py    Numba JIT parallel RK4 (+ energy freeze logic)
+        compute.py           ComputeBackend protocol, BatchResult, BasinResult, saddle energy
+        basin_solver.py      DOP853 adaptive solver for basin mode (final state only)
+        _numpy_backend.py    Vectorized NumPy RK4 for angle mode (+ energy freeze logic)
+        _numba_backend.py    Numba JIT parallel RK4 for angle mode (+ energy freeze logic)
         cache.py             LRU fractal cache with memory tracking
-        worker.py            QThread worker for background computation
+        worker.py            QThread worker (dispatches to RK4 or DOP853 by mode)
         winding.py           Winding number extraction + basin colormaps
         pendulum_diagram.py  Stick-figure pendulum widget (inspect tool)
 
-    tests/                   pytest test suite (273 tests)
+    tests/                   pytest test suite (289 tests)
     docs/                    Living specs and architecture decision records
     requirements.txt         Python dependencies (numpy, scipy, PyQt6)
 ```

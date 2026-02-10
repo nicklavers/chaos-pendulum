@@ -221,10 +221,14 @@ class FractalView(QWidget):
     def _on_level_complete(
         self,
         resolution: int,
-        snapshots: np.ndarray,
-        final_velocities: np.ndarray,
+        data: np.ndarray,
+        final_velocities: np.ndarray | None,
     ) -> None:
-        """Handle a completed progressive level."""
+        """Handle a completed progressive level.
+
+        In basin mode, data is (N, 4) final state.
+        In angle mode, data is (N, 2, n_samples) snapshots.
+        """
         params = self.controls.get_params()
         viewport = self.canvas.get_viewport()
 
@@ -237,16 +241,14 @@ class FractalView(QWidget):
             resolution=resolution,
         )
         key = CacheKey.from_viewport(level_viewport, params)
-        self._cache.put(key, snapshots)
-
-        # Store final velocities for future use
-        self._current_final_velocities = final_velocities
+        self._cache.put(key, data)
 
         # Display this level: basin vs angle mode
         if self._basin_mode:
-            self._display_basin(snapshots)
+            self._display_basin(data)
         else:
-            self.canvas.display(snapshots, self.controls.get_time_index())
+            self._current_final_velocities = final_velocities
+            self.canvas.display(data, self.controls.get_time_index())
 
         logger.debug(
             "Level %dx%d complete, cache: %.1f MB",
@@ -351,14 +353,25 @@ class FractalView(QWidget):
         """Winding colormap dropdown changed."""
         self.canvas.set_winding_colormap(name)
 
-    def _display_basin(self, snapshots: np.ndarray) -> None:
-        """Display the final-state winding number image."""
-        n_samples = snapshots.shape[2]
-        time_index = float(n_samples - 1)
-        self.canvas.display_basin(snapshots, time_index)
+    def _display_basin(self, final_state: np.ndarray) -> None:
+        """Display the final-state winding number image.
+
+        Args:
+            final_state: (N, 4) float32 [theta1, theta2, omega1, omega2].
+        """
+        theta1_final = final_state[:, 0].astype(np.float32)
+        theta2_final = final_state[:, 1].astype(np.float32)
+        self.canvas.display_basin_final(theta1_final, theta2_final)
 
     def _on_hover_updated(self, theta1: float, theta2: float) -> None:
         """Inspect tool: look up pendulum states and update diagrams."""
+        if self._basin_mode:
+            # Basin mode: show initial angles only (no time series available)
+            params = self.controls.get_params()
+            self.controls.set_inspect_params(params)
+            self.controls.update_inspect(theta1, theta2, theta1, theta2, 0.0)
+            return
+
         snapshots = self.canvas._current_snapshots
         if snapshots is None:
             return

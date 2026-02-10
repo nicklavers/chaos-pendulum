@@ -111,14 +111,16 @@ class FractalCache:
         return self._cache[key]
 
     def put(self, key: CacheKey, data: np.ndarray) -> None:
-        """Store snapshot data in the cache.
+        """Store simulation data in the cache.
 
         Validates shape and dtype. Evicts LRU entries if over budget.
+        Accepts 3D arrays (N, 2, n_samples) for angle mode snapshots
+        and 2D arrays (N, 4) for basin mode final state.
         """
         # Validate
-        if data.ndim != 3:
+        if data.ndim not in (2, 3):
             raise ValueError(
-                f"Cache data must be 3D (N, 2, n_samples), got shape {data.shape}"
+                f"Cache data must be 2D or 3D, got {data.ndim}D with shape {data.shape}"
             )
         if data.dtype != np.float32:
             raise ValueError(

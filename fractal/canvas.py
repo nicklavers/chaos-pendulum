@@ -167,6 +167,8 @@ class FractalCanvas(QWidget):
         self._winding_colormap_fn = winding_direction_brightness
         self._cached_winding_legend_name: str | None = None
         self._cached_winding_legend_image = None
+        self._basin_theta1_final: np.ndarray | None = None
+        self._basin_theta2_final: np.ndarray | None = None
 
         # Tool mode
         self._tool_mode = TOOL_ZOOM
@@ -261,19 +263,22 @@ class FractalCanvas(QWidget):
         self._winding_colormap_name = name
         self._winding_colormap_fn = WINDING_COLORMAPS[name]
         self._cached_winding_legend_name = None  # invalidate legend cache
-        if self._basin_mode and self._current_snapshots is not None:
+        if self._basin_mode and self._basin_theta1_final is not None:
             self._rebuild_image()
 
-    def display_basin(self, snapshots: np.ndarray, time_index: float) -> None:
-        """Update display in basin mode (final-state winding numbers).
+    def display_basin_final(
+        self, theta1_final: np.ndarray, theta2_final: np.ndarray,
+    ) -> None:
+        """Update display in basin mode from final angles only.
 
         Args:
-            snapshots: (N, 2, n_samples) float32 array.
-            time_index: Which time sample to display (typically n_samples-1).
+            theta1_final: (N,) float32 array of final unwrapped theta1 values.
+            theta2_final: (N,) float32 array of final unwrapped theta2 values.
         """
         self._basin_mode = True
-        self._current_snapshots = snapshots
-        self._time_index = time_index
+        self._current_snapshots = None  # No time series in basin mode
+        self._basin_theta1_final = theta1_final
+        self._basin_theta2_final = theta2_final
         self._rebuild_image()
 
     def set_resolution(self, resolution: int) -> None:
@@ -367,11 +372,11 @@ class FractalCanvas(QWidget):
 
     def _rebuild_image(self) -> None:
         """Rebuild QImage from current snapshots and time index."""
-        if self._current_snapshots is None:
-            return
-
         if self._basin_mode:
             self._rebuild_image_winding()
+            return
+
+        if self._current_snapshots is None:
             return
 
         if self._angle_index == 2:
@@ -396,16 +401,18 @@ class FractalCanvas(QWidget):
 
     def _rebuild_image_winding(self) -> None:
         """Rebuild QImage using winding number colormap (basin mode)."""
-        snaps = self._current_snapshots
-        time_idx = int(self._time_index)
-        time_idx = min(time_idx, snaps.shape[2] - 1)
+        theta1_final = self._basin_theta1_final
+        theta2_final = self._basin_theta2_final
+        if theta1_final is None or theta2_final is None:
+            return
 
-        theta1_final = snaps[:, 0, time_idx].astype(np.float32)
-        theta2_final = snaps[:, 1, time_idx].astype(np.float32)
         res = int(math.sqrt(theta1_final.shape[0]))
 
         argb = winding_to_argb(
-            theta1_final, theta2_final, self._winding_colormap_fn, res,
+            theta1_final.astype(np.float32),
+            theta2_final.astype(np.float32),
+            self._winding_colormap_fn,
+            res,
         )
         self._current_image = numpy_to_qimage(argb)
         self.update()

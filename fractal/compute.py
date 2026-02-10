@@ -23,13 +23,23 @@ DEFAULT_N_SAMPLES = 96
 
 
 class BatchResult(NamedTuple):
-    """Immutable result from a batch simulation.
+    """Immutable result from a batch simulation (angle mode).
 
     Supports tuple unpacking: ``snapshots, velocities = result``.
     """
 
     snapshots: np.ndarray        # (N, 2, n_samples) float32
     final_velocities: np.ndarray  # (N, 2) float32 [omega1, omega2]
+
+
+class BasinResult(NamedTuple):
+    """Immutable result from a basin-mode simulation.
+
+    Stores only the final state of each trajectory, not the full time series.
+    Supports tuple unpacking: ``(final_state,) = result``.
+    """
+
+    final_state: np.ndarray  # (N, 4) float32 [theta1, theta2, omega1, omega2]
 
 
 @dataclass(frozen=True)

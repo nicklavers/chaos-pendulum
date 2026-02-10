@@ -64,9 +64,19 @@ class BatchResult(NamedTuple):
     final_velocities: np.ndarray # (N, 2) float32 [omega1, omega2]
 ```
 
-Immutable result from batch simulation. Supports tuple unpacking:
-`snapshots, velocities = result`. The `final_velocities` sidecar enables
-energy-based convergence checks without finite-differencing the snapshot array.
+Immutable result from angle-mode batch simulation. Supports tuple unpacking:
+`snapshots, velocities = result`.
+
+### `BasinResult` (fractal/compute.py)
+
+```python
+class BasinResult(NamedTuple):
+    final_state: np.ndarray  # (N, 4) float32 [theta1, theta2, omega1, omega2]
+```
+
+Immutable result from basin-mode DOP853 simulation. Stores only the final state
+of each trajectory (no intermediate snapshots). Supports tuple unpacking:
+`(final_state,) = result`.
 
 ### `CacheKey` (fractal/cache.py)
 
@@ -129,7 +139,7 @@ to functions with signature `(theta1: ndarray, theta2: ndarray) -> (N, 4) uint8`
 
 | Signal | Source | Payload |
 |--------|--------|---------|
-| `level_complete` | `FractalWorker` | `(int, np.ndarray, np.ndarray)` — resolution, snapshots `(N, 2, n_samples)`, final_velocities `(N, 2)` |
+| `level_complete` | `FractalWorker` | `(int, np.ndarray, np.ndarray\|None)` — resolution, data, final_velocities. Angle mode: data is snapshots `(N, 2, n_samples)`, final_velocities `(N, 2)`. Basin mode: data is final_state `(N, 4)`, final_velocities is `None`. |
 | `progress` | `FractalWorker` | `(int, int)` — steps_done, total_steps |
 | `viewport_changed` | `FractalCanvas` | `FractalViewport` |
 | `ic_selected` | `FractalCanvas` | `(float, float)` — theta1, theta2 (Ctrl+click) |

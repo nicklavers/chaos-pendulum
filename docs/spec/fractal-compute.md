@@ -40,15 +40,21 @@ Auto-selected via `get_default_backend()` with try/except ImportError fallback:
 | 2 | Numba | `_numba_backend.py` | numba | 0.3–0.5s (CPU JIT) |
 | 3 | NumPy | `_numpy_backend.py` | (none) | 10–15s (CPU) |
 
-## RK4 Integration
+## Integration Methods
 
-All backends use fixed-step RK4 (not adaptive). Step size `dt = 0.01`
-(3,000 steps for 30s simulation).
+### Angle mode: Vectorized RK4
 
-Fixed-step accuracy is sufficient for fractal visualization — sub-pixel
-shifts in basin boundaries are invisible. The scalar DOP853 in
-`simulation.py` is preserved for pendulum mode where energy conservation
-matters.
+All angle-mode backends use fixed-step RK4 (not adaptive). Step size `dt = 0.01`
+(3,000 steps for 30s simulation). Fixed-step accuracy is sufficient for fractal
+visualization — sub-pixel shifts in boundaries are invisible.
+
+### Basin mode: Adaptive DOP853
+
+Basin mode uses `fractal/basin_solver.py`, which integrates each trajectory
+independently via `scipy.integrate.solve_ivp(method="DOP853")`. Returns only
+the final state `(N, 4)` as a `BasinResult` — no intermediate snapshots needed
+since basin mode only displays winding numbers. Energy-based early termination
+is implemented via solve_ivp events (see below). Tolerances: `rtol=1e-8, atol=1e-8`.
 
 ## Vectorized Batch Processing
 
@@ -63,8 +69,17 @@ same equations (including friction damping) but different array shapes.
 
 In basin mode (damped simulations with `friction > 0`), trajectories that
 lose enough energy can never change winding number. The worker computes
-`saddle_energy(params)` — the lowest saddle-point potential energy — and
-passes it to the backend. Each backend periodically checks total energy:
+`saddle_energy(params)` — the lowest saddle-point potential energy.
+
+### Basin mode (DOP853)
+
+The basin solver uses solve_ivp's `events` parameter. A terminal event fires
+when total energy drops below the saddle threshold, stopping the integration
+immediately for that trajectory.
+
+### Angle mode (RK4 — freeze logic)
+
+The RK4 backends use a freeze mask for the same optimization in angle mode:
 
 - **NumPy backend**: checks every 50 RK4 steps via `total_energy_batch()`.
   Newly frozen trajectories have their remaining snapshot slots filled with
@@ -73,9 +88,6 @@ passes it to the backend. Each backend periodically checks total energy:
 - **Numba backend**: each trajectory independently checks energy after every
   RK4 step. When energy drops below the threshold, remaining snapshot slots
   are filled and the per-trajectory loop breaks.
-
-This optimization can reduce basin mode compute time significantly when
-friction is high, since most trajectories settle quickly.
 
 ## Progressive Rendering Levels
 
@@ -92,7 +104,10 @@ that communicates "this is a preview."
 
 ## Cancellation
 
-The RK4 loop checks a cancellation flag every ~100 steps (~1s response time).
+- **Angle mode**: the RK4 loop checks a cancellation flag every ~100 steps (~1s
+  response time).
+- **Basin mode**: the basin solver checks cancellation every ~100 trajectories.
+
 If the user pans, zooms, or changes parameters during computation, the current
 level is cancelled and the pipeline restarts.
 

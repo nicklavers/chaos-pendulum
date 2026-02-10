@@ -1,7 +1,8 @@
 # Workers
 
 Thread architecture, signals, and cancellation patterns. Files:
-`fractal/worker.py` (~105 lines), `fractal/view.py` (~404 lines).
+`fractal/worker.py` (~118 lines), `fractal/basin_solver.py` (~126 lines),
+`fractal/view.py` (~405 lines).
 
 > Cross-ref: [data-shapes.md](data-shapes.md) for signal payloads.
 > Cross-ref: [fractal-compute.md](fractal-compute.md) for progressive levels.
@@ -16,17 +17,20 @@ Runs the progressive computation pipeline in a background thread.
    resolution levels
 2. If `task.basin` and `task.params.friction > 0`, computes `saddle_energy(params)`
    for early termination
-3. Iterates through levels, calling `simulate_batch()` for each (passing
-   `saddle_energy_val` when in basin mode)
-4. Emits `level_complete(resolution, snapshots, final_velocities)` after each level
-5. Emits `progress(steps_done, total_steps)` during computation
-6. Emits `all_complete()` when all levels finish
-7. Thread exits → `finished` signal
+3. Iterates through levels. Dispatches based on mode:
+   - **Basin mode**: calls `simulate_basin_batch()` (DOP853, per-trajectory adaptive),
+     emits `level_complete(resolution, final_state, None)` where `final_state` is `(N, 4)`
+   - **Angle mode**: calls `backend.simulate_batch()` (vectorized RK4),
+     emits `level_complete(resolution, snapshots, final_velocities)`
+4. Emits `progress(steps_done, total_steps)` during computation
+5. Emits `all_complete()` when all levels finish
+6. Thread exits → `finished` signal
 
 ### Cancellation
 
-`cancel()` sets an atomic flag checked by the backend every ~100 RK4 steps.
-Response time: ~1s. The worker exits its level loop early when cancelled.
+`cancel()` sets an atomic flag. In angle mode, checked every ~100 RK4 steps
+(~1s response time). In basin mode, checked every ~100 trajectories.
+The worker exits its level loop early when cancelled.
 
 ## FractalView Orchestration
 
@@ -77,7 +81,7 @@ Retired workers clean themselves up via their `finished` signal.
 
 ### Worker Signal Handlers
 
-- `_on_level_complete(resolution, snapshots, final_velocities)`: cache the result, display it
+- `_on_level_complete(resolution, data, final_velocities)`: cache the result, display it (data shape differs by mode)
 - `_on_progress(steps_done, total_steps)`: update loading overlay percentage
 - `_on_all_complete()`: stop loading overlay, activate pending ghost rectangle
 - `_on_worker_finished()`: clear worker reference if it's still the current one
@@ -86,8 +90,8 @@ Retired workers clean themselves up via their `finished` signal.
 
 - **PendulumSimWorker** (in `pendulum/view.py`): sequential DOP853 for 1–500
   trajectories. Uses `simulation.simulate()`.
-- **FractalWorker** (in `fractal/worker.py`): vectorized RK4 batch. No
-  multiprocessing Pool — the vectorized approach is fast enough.
+- **FractalWorker** (in `fractal/worker.py`): dispatches to vectorized RK4
+  (angle mode) or DOP853 basin solver (basin mode).
 
 ## No Shared Mutable State
 

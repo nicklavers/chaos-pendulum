@@ -1,7 +1,7 @@
 """Fractal worker: QThread for background compute with progressive levels.
 
-Runs the vectorized RK4 computation in a background thread, emitting
-signals for each completed resolution level and progress updates.
+Runs vectorized RK4 (angle mode) or adaptive DOP853 (basin mode) in a
+background thread, emitting signals for each completed resolution level.
 """
 
 from __future__ import annotations
@@ -15,6 +15,7 @@ from fractal.compute import (
     FractalTask, FractalViewport, ComputeBackend,
     build_initial_conditions, saddle_energy,
 )
+from fractal.basin_solver import simulate_basin_batch
 
 logger = logging.getLogger(__name__)
 
@@ -80,26 +81,39 @@ class FractalWorker(QThread):
             )
 
             try:
-                result = self._backend.simulate_batch(
-                    params=task.params,
-                    initial_conditions=ics,
-                    t_end=task.t_end,
-                    dt=task.dt,
-                    n_samples=task.n_samples,
-                    cancel_check=self._cancel_check,
-                    progress_callback=lambda done, total: self.progress.emit(done, total),
-                    saddle_energy_val=saddle_val,
-                )
+                if task.basin:
+                    result = simulate_basin_batch(
+                        params=task.params,
+                        initial_conditions=ics,
+                        t_end=task.t_end,
+                        cancel_check=self._cancel_check,
+                        progress_callback=lambda done, total: self.progress.emit(done, total),
+                        saddle_energy_val=saddle_val,
+                    )
+                    if self._cancelled:
+                        return
+                    self.level_complete.emit(
+                        level_res, result.final_state, None,
+                    )
+                else:
+                    result = self._backend.simulate_batch(
+                        params=task.params,
+                        initial_conditions=ics,
+                        t_end=task.t_end,
+                        dt=task.dt,
+                        n_samples=task.n_samples,
+                        cancel_check=self._cancel_check,
+                        progress_callback=lambda done, total: self.progress.emit(done, total),
+                        saddle_energy_val=saddle_val,
+                    )
+                    if self._cancelled:
+                        return
+                    self.level_complete.emit(
+                        level_res, result.snapshots, result.final_velocities,
+                    )
             except Exception:
                 logger.exception("Fractal computation failed at level %d", level_res)
                 return
-
-            if self._cancelled:
-                return
-
-            self.level_complete.emit(
-                level_res, result.snapshots, result.final_velocities,
-            )
 
         if not self._cancelled:
             self.all_complete.emit()

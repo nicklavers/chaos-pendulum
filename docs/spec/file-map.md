@@ -26,10 +26,11 @@ chaos-pendulum/
         controls.py                 512 lines   Time slider, colormap, resolution, basin mode, inspect
         view.py                     404 lines   FractalView: orchestration, signal wiring
         pendulum_diagram.py         133 lines   PendulumDiagram: stick-figure widget
-        worker.py                   105 lines   FractalWorker QThread (+ saddle energy)
-        compute.py                  173 lines   ComputeBackend Protocol, BatchResult, saddle_energy
-        _numpy_backend.py           253 lines   Vectorized NumPy RK4 (+ energy freeze logic)
-        _numba_backend.py           225 lines   @njit parallel RK4 (+ energy freeze logic)
+        worker.py                   118 lines   FractalWorker QThread (dispatches to RK4 or DOP853)
+        compute.py                  183 lines   ComputeBackend Protocol, BatchResult, BasinResult, saddle_energy
+        basin_solver.py             126 lines   DOP853 adaptive solver for basin mode (final state only)
+        _numpy_backend.py           253 lines   Vectorized NumPy RK4 for angle mode (+ energy freeze logic)
+        _numba_backend.py           225 lines   @njit parallel RK4 for angle mode (+ energy freeze logic)
         cache.py                    176 lines   FractalCache, CacheKey, LRU
         coloring.py                 170 lines   HSV LUT, angle_to_argb, QImage builder (univariate)
         bivariate.py                577 lines   Torus colormaps, bivariate_to_argb, legend builder
@@ -41,13 +42,14 @@ chaos-pendulum/
         test_coloring.py                       Univariate coloring + angle slicing tests
         test_bivariate.py                      Torus colormaps: landmarks, periodicity, performance
         test_cache.py
-        test_compute.py                        BatchResult, saddle_energy, FractalTask.basin
+        test_compute.py                        BatchResult, BasinResult, saddle_energy, FractalTask.basin
+        test_basin_solver.py                   DOP853 basin solver: shape, winding, energy, cross-validation
         test_damping.py                        Friction: derivatives, energy decay, convergence
         test_winding.py                        Winding number extraction + colormaps
         test_energy_termination.py             Freeze behavior, speedup, winding stability
 ```
 
-**Total**: ~4,700 lines across ~23 modules.
+**Total**: ~4,900 lines across ~24 modules.
 
 ## Notes
 
@@ -83,6 +85,7 @@ main.py --> app_window.py
                     |     --> fractal/winding.py   (WINDING_COLORMAPS registry)
                     |     --> fractal/pendulum_diagram.py --> simulation.py
                     --> fractal/worker.py     --> fractal/compute.py
+                    |                         --> fractal/basin_solver.py --> simulation.py
                     |                              --> fractal/_numpy_backend.py
                     |                              --> fractal/_numba_backend.py
                     --> fractal/cache.py

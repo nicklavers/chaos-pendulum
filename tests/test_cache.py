@@ -188,12 +188,30 @@ class TestFractalCache:
         with pytest.raises(ValueError, match="float32"):
             cache.put(key, data)
 
-    def test_put_validates_shape(self):
+    def test_put_accepts_2d_basin_data(self):
+        """Cache should accept 2D float32 arrays (basin mode final state)."""
         cache = FractalCache(max_bytes=100 * 1024 * 1024)
         key = _make_key()
-        data = np.zeros((64 * 64, 96), dtype=np.float32)  # 2D, not 3D
+        data = np.zeros((64 * 64, 4), dtype=np.float32)
+        cache.put(key, data)
+        result = cache.get(key)
+        assert result is not None
+        np.testing.assert_array_equal(result, data)
 
-        with pytest.raises(ValueError, match="3D"):
+    def test_put_rejects_1d(self):
+        """Cache should reject 1D arrays."""
+        cache = FractalCache(max_bytes=100 * 1024 * 1024)
+        key = _make_key()
+        data = np.zeros(100, dtype=np.float32)
+        with pytest.raises(ValueError, match="2D or 3D"):
+            cache.put(key, data)
+
+    def test_put_rejects_4d(self):
+        """Cache should reject 4D arrays."""
+        cache = FractalCache(max_bytes=100 * 1024 * 1024)
+        key = _make_key()
+        data = np.zeros((2, 2, 2, 2), dtype=np.float32)
+        with pytest.raises(ValueError, match="2D or 3D"):
             cache.put(key, data)
 
     def test_replace_existing_entry(self):

@@ -1,6 +1,6 @@
 # ADR 0011: Energy-Based Early Termination for Basin Mode
 
-**Status**: Accepted
+**Status**: Superseded by ADR-0012
 **Date**: 2026-02
 
 ## Context
