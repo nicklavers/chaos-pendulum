@@ -26,6 +26,10 @@ from fractal.bivariate import (
     bivariate_to_argb, build_torus_legend, TORUS_COLORMAPS,
     torus_rgb_aligned_ybgm,
 )
+from fractal.winding import (
+    winding_to_argb, build_winding_legend, WINDING_COLORMAPS,
+    winding_direction_brightness,
+)
 
 
 # Zoom limits
@@ -157,6 +161,13 @@ class FractalCanvas(QWidget):
         self._cached_torus_legend_name: str | None = None
         self._cached_torus_legend_image = None
 
+        # Basin (winding number) mode state
+        self._basin_mode = False
+        self._winding_colormap_name = "Direction + Brightness"
+        self._winding_colormap_fn = winding_direction_brightness
+        self._cached_winding_legend_name: str | None = None
+        self._cached_winding_legend_image = None
+
         # Tool mode
         self._tool_mode = TOOL_ZOOM
         self.setCursor(Qt.CursorShape.CrossCursor)
@@ -238,6 +249,32 @@ class FractalCanvas(QWidget):
         self._cached_torus_legend_name = None  # invalidate legend cache
         if self._angle_index == 2 and self._current_snapshots is not None:
             self._rebuild_image()
+
+    def set_basin_mode(self, basin: bool) -> None:
+        """Toggle basin (winding number) display mode."""
+        self._basin_mode = basin
+
+    def set_winding_colormap(self, name: str) -> None:
+        """Change the active winding colormap and refresh."""
+        if name not in WINDING_COLORMAPS:
+            return
+        self._winding_colormap_name = name
+        self._winding_colormap_fn = WINDING_COLORMAPS[name]
+        self._cached_winding_legend_name = None  # invalidate legend cache
+        if self._basin_mode and self._current_snapshots is not None:
+            self._rebuild_image()
+
+    def display_basin(self, snapshots: np.ndarray, time_index: float) -> None:
+        """Update display in basin mode (final-state winding numbers).
+
+        Args:
+            snapshots: (N, 2, n_samples) float32 array.
+            time_index: Which time sample to display (typically n_samples-1).
+        """
+        self._basin_mode = True
+        self._current_snapshots = snapshots
+        self._time_index = time_index
+        self._rebuild_image()
 
     def set_resolution(self, resolution: int) -> None:
         """Update the target resolution."""
@@ -333,6 +370,10 @@ class FractalCanvas(QWidget):
         if self._current_snapshots is None:
             return
 
+        if self._basin_mode:
+            self._rebuild_image_winding()
+            return
+
         if self._angle_index == 2:
             # Bivariate mode: extract both angle slices
             theta1_snaps = self._current_snapshots[:, 0, :]
@@ -350,6 +391,22 @@ class FractalCanvas(QWidget):
             res = int(math.sqrt(angles.shape[0]))
             argb = angle_to_argb(angles, self._lut, res)
 
+        self._current_image = numpy_to_qimage(argb)
+        self.update()
+
+    def _rebuild_image_winding(self) -> None:
+        """Rebuild QImage using winding number colormap (basin mode)."""
+        snaps = self._current_snapshots
+        time_idx = int(self._time_index)
+        time_idx = min(time_idx, snaps.shape[2] - 1)
+
+        theta1_final = snaps[:, 0, time_idx].astype(np.float32)
+        theta2_final = snaps[:, 1, time_idx].astype(np.float32)
+        res = int(math.sqrt(theta1_final.shape[0]))
+
+        argb = winding_to_argb(
+            theta1_final, theta2_final, self._winding_colormap_fn, res,
+        )
         self._current_image = numpy_to_qimage(argb)
         self.update()
 
@@ -786,6 +843,79 @@ class FractalCanvas(QWidget):
 
         painter.restore()
 
+    def _draw_winding_legend(self, painter: QPainter) -> None:
+        """Draw a 2D grid legend in the bottom-right corner (basin mode)."""
+        img_x, img_y, side = self._image_rect()
+
+        # Build or reuse cached legend image
+        if self._cached_winding_legend_name != self._winding_colormap_name:
+            legend_data = build_winding_legend(self._winding_colormap_fn)
+            self._cached_winding_legend_image = numpy_to_qimage(legend_data)
+            self._cached_winding_legend_name = self._winding_colormap_name
+
+        legend_w = self._cached_winding_legend_image.width()
+        legend_h = self._cached_winding_legend_image.height()
+        padding = 8
+
+        # Position: bottom-right of image area
+        lx = int(img_x + side - legend_w - padding)
+        ly = int(img_y + side - legend_h - padding)
+
+        painter.save()
+
+        # Draw the legend grid
+        painter.drawImage(lx, ly, self._cached_winding_legend_image)
+
+        # Border
+        painter.setPen(QColor(200, 200, 210))
+        painter.drawRect(lx, ly, legend_w, legend_h)
+
+        # Axis labels
+        font = QFont("Helvetica", 10)
+        painter.setFont(font)
+        fm = QFontMetrics(font)
+
+        # n1 label (below, centered)
+        painter.setPen(QColor(160, 160, 170))
+        n1_label = "n\u2081"
+        tw = fm.horizontalAdvance(n1_label)
+        painter.drawText(
+            int(lx + legend_w / 2 - tw / 2),
+            ly + legend_h + fm.ascent() + 2,
+            n1_label,
+        )
+
+        # n2 label (left, centered, rotated)
+        n2_label = "n\u2082"
+        painter.save()
+        painter.translate(lx - fm.ascent() - 2, ly + legend_h / 2)
+        painter.rotate(-90)
+        tw2 = fm.horizontalAdvance(n2_label)
+        painter.drawText(int(-tw2 / 2), 0, n2_label)
+        painter.restore()
+
+        # Corner range labels
+        painter.setPen(QColor(130, 130, 140))
+        small_font = QFont("Helvetica", 8)
+        painter.setFont(small_font)
+        sfm = QFontMetrics(small_font)
+
+        # Bottom-left: "-3", bottom-right: "+3" (n1 axis)
+        painter.drawText(lx, ly + legend_h + sfm.ascent(), "-3")
+        tw_3 = sfm.horizontalAdvance("+3")
+        painter.drawText(
+            int(lx + legend_w - tw_3),
+            ly + legend_h + sfm.ascent(),
+            "+3",
+        )
+
+        # Top-left: "-3", bottom-left: "+3" (n2 axis)
+        tw_m3 = sfm.horizontalAdvance("-3")
+        painter.drawText(lx - tw_m3 - 2, ly + sfm.ascent(), "-3")
+        painter.drawText(lx - tw_3 - 2, ly + legend_h, "+3")
+
+        painter.restore()
+
     # -- Paint --
 
     def paintEvent(self, event):
@@ -837,8 +967,10 @@ class FractalCanvas(QWidget):
         # Axes, labels, and reference lines
         self._draw_axes(painter)
 
-        # Legend: 2D torus grid or 1D donut wheel
-        if self._angle_index == 2:
+        # Legend: winding grid, torus grid, or donut wheel
+        if self._basin_mode:
+            self._draw_winding_legend(painter)
+        elif self._angle_index == 2:
             self._draw_torus_legend(painter)
         else:
             self._draw_legend(painter)

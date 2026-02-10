@@ -18,11 +18,17 @@ class ComputeBackend(Protocol):
         n_samples: int,
         cancel_check: Callable[[], bool] | None = None,
         progress_callback: Callable[[int, int], None] | None = None,
-    ) -> np.ndarray:  # (N, 2, n_samples) float32
+        saddle_energy_val: float | None = None,
+    ) -> BatchResult:
         ...
 ```
 
-Returns unwrapped `[theta1, theta2]` at `n_samples` uniformly spaced timesteps.
+Returns a `BatchResult` containing unwrapped `[theta1, theta2]` snapshots at
+`n_samples` uniformly spaced timesteps, plus final velocities `[omega1, omega2]`.
+
+When `saddle_energy_val` is provided and `params.friction > 0`, trajectories
+whose total energy drops below the threshold are frozen early (see
+[Energy-Based Early Termination](#energy-based-early-termination) below).
 
 ## Backend Selection
 
@@ -51,7 +57,25 @@ All trajectories advance through each timestep simultaneously as a single
 
 The NumPy backend implements `derivatives_batch()` which duplicates the
 physics from `simulation.py`'s scalar `derivatives()`. Both operate on the
-same equations but different array shapes.
+same equations (including friction damping) but different array shapes.
+
+## Energy-Based Early Termination
+
+In basin mode (damped simulations with `friction > 0`), trajectories that
+lose enough energy can never change winding number. The worker computes
+`saddle_energy(params)` — the lowest saddle-point potential energy — and
+passes it to the backend. Each backend periodically checks total energy:
+
+- **NumPy backend**: checks every 50 RK4 steps via `total_energy_batch()`.
+  Newly frozen trajectories have their remaining snapshot slots filled with
+  the freeze-time angles. A boolean mask tracks frozen trajectories; once all
+  are frozen, the loop exits early.
+- **Numba backend**: each trajectory independently checks energy after every
+  RK4 step. When energy drops below the threshold, remaining snapshot slots
+  are filled and the per-trajectory loop breaks.
+
+This optimization can reduce basin mode compute time significantly when
+friction is high, since most trajectories settle quickly.
 
 ## Progressive Rendering Levels
 

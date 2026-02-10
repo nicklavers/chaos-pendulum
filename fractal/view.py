@@ -75,6 +75,10 @@ class FractalView(QWidget):
         self._retiring_workers: list[FractalWorker] = []
         self._current_params: DoublePendulumParams | None = None
 
+        # Basin display mode
+        self._basin_mode = False
+        self._current_final_velocities: np.ndarray | None = None
+
         # Status labels (AppWindow will read these)
         self._status_text = ""
 
@@ -89,6 +93,8 @@ class FractalView(QWidget):
         self.controls.t_end_changed.connect(self._on_t_end_changed)
         self.controls.zoom_out_clicked.connect(self._on_zoom_out)
         self.controls.tool_mode_changed.connect(self.canvas.set_tool_mode)
+        self.controls.display_mode_changed.connect(self._on_display_mode_changed)
+        self.controls.winding_colormap_changed.connect(self._on_winding_colormap_changed)
         self.canvas.hover_updated.connect(self._on_hover_updated)
 
     # -- Public interface for mode switching --
@@ -129,12 +135,22 @@ class FractalView(QWidget):
         params = self.controls.get_params()
         self._current_params = params
 
+        # Determine t_end: auto-scaled in basin mode, user-set in angle mode
+        if self._basin_mode:
+            mu = max(params.friction, 0.01)
+            t_end = min(5.0 / mu, 500.0)
+        else:
+            t_end = self.controls.get_t_end()
+
         # Check cache for the full-resolution result
         full_key = CacheKey.from_viewport(viewport, params)
         cached = self._cache.get(full_key)
         if cached is not None:
             logger.debug("Cache hit for %s", full_key)
-            self.canvas.display(cached, self.controls.get_time_index())
+            if self._basin_mode:
+                self._display_basin(cached)
+            else:
+                self.canvas.display(cached, self.controls.get_time_index())
             return
 
         # Cache miss: start progressive pipeline
@@ -146,9 +162,10 @@ class FractalView(QWidget):
         task = FractalTask(
             params=params,
             viewport=viewport,
-            t_end=self.controls.get_t_end(),
+            t_end=t_end,
             dt=DEFAULT_DT,
             n_samples=DEFAULT_N_SAMPLES,
+            basin=self._basin_mode,
         )
 
         self._worker = FractalWorker(task, self._backend, self._progressive_levels)
@@ -201,7 +218,12 @@ class FractalView(QWidget):
 
     # -- Worker signal handlers --
 
-    def _on_level_complete(self, resolution: int, snapshots: np.ndarray) -> None:
+    def _on_level_complete(
+        self,
+        resolution: int,
+        snapshots: np.ndarray,
+        final_velocities: np.ndarray,
+    ) -> None:
         """Handle a completed progressive level."""
         params = self.controls.get_params()
         viewport = self.canvas.get_viewport()
@@ -217,8 +239,14 @@ class FractalView(QWidget):
         key = CacheKey.from_viewport(level_viewport, params)
         self._cache.put(key, snapshots)
 
-        # Display this level
-        self.canvas.display(snapshots, self.controls.get_time_index())
+        # Store final velocities for future use
+        self._current_final_velocities = final_velocities
+
+        # Display this level: basin vs angle mode
+        if self._basin_mode:
+            self._display_basin(snapshots)
+        else:
+            self.canvas.display(snapshots, self.controls.get_time_index())
 
         logger.debug(
             "Level %dx%d complete, cache: %.1f MB",
@@ -310,6 +338,24 @@ class FractalView(QWidget):
         self._cache.clear()
         viewport = self.canvas.get_viewport()
         self._start_computation(viewport)
+
+    def _on_display_mode_changed(self, mode: str) -> None:
+        """Handle Angle/Basin toggle from controls."""
+        self._basin_mode = (mode == "basin")
+        self.canvas.set_basin_mode(self._basin_mode)
+        self._cache.clear()
+        viewport = self.canvas.get_viewport()
+        self._start_computation(viewport)
+
+    def _on_winding_colormap_changed(self, name: str) -> None:
+        """Winding colormap dropdown changed."""
+        self.canvas.set_winding_colormap(name)
+
+    def _display_basin(self, snapshots: np.ndarray) -> None:
+        """Display the final-state winding number image."""
+        n_samples = snapshots.shape[2]
+        time_index = float(n_samples - 1)
+        self.canvas.display_basin(snapshots, time_index)
 
     def _on_hover_updated(self, theta1: float, theta2: float) -> None:
         """Inspect tool: look up pendulum states and update diagrams."""

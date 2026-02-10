@@ -42,7 +42,7 @@ def slider_value(slider):
 # ---------------------------------------------------------------------------
 
 class PhysicsParamsWidget(QWidget):
-    """Grouped sliders for the shared physics parameters (m1, m2, l1, l2).
+    """Grouped sliders for the shared physics parameters (m1, m2, l1, l2, mu).
 
     Emits no signals itself; call get_params() to read current values.
     The parent can connect slider.valueChanged to detect changes.
@@ -57,11 +57,13 @@ class PhysicsParamsWidget(QWidget):
         self.m2_slider = make_slider(0.1, 5.0, 1.0)
         self.l1_slider = make_slider(0.1, 3.0, 1.0)
         self.l2_slider = make_slider(0.1, 3.0, 1.0)
+        self.friction_slider = make_slider(0.0, 5.0, 0.0)
 
         self._add_row(layout, 0, "m\u2081", self.m1_slider, " kg")
         self._add_row(layout, 1, "m\u2082", self.m2_slider, " kg")
         self._add_row(layout, 2, "l\u2081", self.l1_slider, " m")
         self._add_row(layout, 3, "l\u2082", self.l2_slider, " m")
+        self._add_row(layout, 4, "\u03bc", self.friction_slider)
 
     def _add_row(self, layout, row, label_text, slider, unit=""):
         label = QLabel(label_text)
@@ -87,6 +89,7 @@ class PhysicsParamsWidget(QWidget):
             m2=slider_value(self.m2_slider),
             l1=slider_value(self.l1_slider),
             l2=slider_value(self.l2_slider),
+            friction=slider_value(self.friction_slider),
         )
 
     def set_params(self, params):
@@ -95,6 +98,9 @@ class PhysicsParamsWidget(QWidget):
         self.m2_slider.setValue(int(params.m2 * self.m2_slider.resolution))
         self.l1_slider.setValue(int(params.l1 * self.l1_slider.resolution))
         self.l2_slider.setValue(int(params.l2 * self.l2_slider.resolution))
+        self.friction_slider.setValue(
+            int(params.friction * self.friction_slider.resolution)
+        )
 
 
 # ---------------------------------------------------------------------------

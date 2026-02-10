@@ -13,7 +13,7 @@ the **current state** of a subsystem — no history, no rationale (see
 | [simulation.md](simulation.md) | Physics engine (`simulation.py`) | `DoublePendulumParams`, `derivatives()`, `positions()` |
 | [fractal-compute.md](fractal-compute.md) | Compute backends and progressive rendering | `ComputeBackend` Protocol, NumPy / Numba / JAX backends |
 | [fractal-caching.md](fractal-caching.md) | Cache architecture and eviction | `FractalCache`, `CacheKey`, LRU budget |
-| [coloring-pipeline.md](coloring-pipeline.md) | Color mapping from angles to pixels | Univariate (1D LUT), bivariate (torus colormaps), `TORUS_COLORMAPS` |
+| [coloring-pipeline.md](coloring-pipeline.md) | Color mapping from angles to pixels | Univariate (1D LUT), bivariate (torus colormaps), winding (basin mode) |
 | [canvas-rendering.md](canvas-rendering.md) | Canvas drawing: axes, legend, ghost rect, tool modes | `FractalCanvas`, coordinate mapping, overlays |
 | [controls-ui.md](controls-ui.md) | Controls panel layout and signals | `FractalControls`, time slider, physics params |
 | [inspect-tool.md](inspect-tool.md) | Inspect tool data flow and pendulum diagrams | `PendulumDiagram`, hover → lookup → display |

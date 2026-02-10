@@ -7,8 +7,9 @@ import pytest
 
 from simulation import DoublePendulumParams
 from fractal.compute import (
-    FractalViewport, FractalTask, DEFAULT_N_SAMPLES,
+    FractalViewport, FractalTask, DEFAULT_N_SAMPLES, BatchResult,
     build_initial_conditions, get_default_backend, get_progressive_levels,
+    saddle_energy,
 )
 
 
@@ -113,3 +114,93 @@ class TestFractalTask:
         assert task.t_end == 30.0
         assert task.dt == 0.01
         assert task.n_samples == 96
+
+    def test_basin_default_false(self):
+        """Basin field should default to False."""
+        params = DoublePendulumParams()
+        vp = FractalViewport(0.0, 0.0, 6.28, 6.28, 64)
+        task = FractalTask(params, vp, 30.0, 0.01, 96)
+        assert task.basin is False
+
+    def test_basin_true(self):
+        """Basin field can be set to True."""
+        params = DoublePendulumParams()
+        vp = FractalViewport(0.0, 0.0, 6.28, 6.28, 64)
+        task = FractalTask(params, vp, 30.0, 0.01, 96, basin=True)
+        assert task.basin is True
+
+    def test_basin_immutable(self):
+        """Basin field should be immutable."""
+        params = DoublePendulumParams()
+        vp = FractalViewport(0.0, 0.0, 6.28, 6.28, 64)
+        task = FractalTask(params, vp, 30.0, 0.01, 96, basin=True)
+        with pytest.raises(AttributeError):
+            task.basin = False
+
+
+class TestBatchResult:
+    """Test BatchResult NamedTuple."""
+
+    def test_field_access(self):
+        """Should provide named field access."""
+        snaps = np.zeros((4, 2, 10), dtype=np.float32)
+        vels = np.zeros((4, 2), dtype=np.float32)
+        result = BatchResult(snaps, vels)
+        assert result.snapshots is snaps
+        assert result.final_velocities is vels
+
+    def test_tuple_unpacking(self):
+        """Should support tuple unpacking."""
+        snaps = np.ones((4, 2, 10), dtype=np.float32)
+        vels = np.ones((4, 2), dtype=np.float32)
+        result = BatchResult(snaps, vels)
+
+        s, v = result
+        assert np.array_equal(s, snaps)
+        assert np.array_equal(v, vels)
+
+    def test_immutable(self):
+        """NamedTuple fields should be read-only."""
+        snaps = np.zeros((4, 2, 10), dtype=np.float32)
+        vels = np.zeros((4, 2), dtype=np.float32)
+        result = BatchResult(snaps, vels)
+        with pytest.raises(AttributeError):
+            result.snapshots = np.zeros((4, 2, 10), dtype=np.float32)
+
+
+class TestSaddleEnergy:
+    """Test saddle_energy() computation."""
+
+    def test_default_params(self):
+        """Default params: min(V(pi,0), V(0,pi)) should be -9.81."""
+        params = DoublePendulumParams()
+        se = saddle_energy(params)
+        # V(pi,0) = (1+1)*9.81*1 - 1*9.81*1 = 9.81
+        # V(0,pi) = -(1+1)*9.81*1 + 1*9.81*1 = -9.81
+        assert se == pytest.approx(-9.81)
+
+    def test_asymmetric_masses(self):
+        """With m1=2, m2=1: V(pi,0)=(2+1)*g*1 - 1*g*1 = 2g, V(0,pi)=-2g."""
+        params = DoublePendulumParams(m1=2.0, m2=1.0, g=10.0)
+        se = saddle_energy(params)
+        # V(pi,0) = 3*10*1 - 1*10*1 = 20
+        # V(0,pi) = -3*10*1 + 1*10*1 = -20
+        assert se == pytest.approx(-20.0)
+
+    def test_pure_function(self):
+        """Calling saddle_energy should not modify params."""
+        params = DoublePendulumParams(m1=1.5, m2=0.8, l1=1.2, l2=0.9, g=9.81)
+        se1 = saddle_energy(params)
+        se2 = saddle_energy(params)
+        assert se1 == se2
+        assert params.m1 == 1.5
+        assert params.m2 == 0.8
+
+    def test_symmetric_params_zero(self):
+        """When (m1+m2)*g*l1 == m2*g*l2, one saddle is at zero."""
+        # (m1+m2)*g*l1 = m2*g*l2 => 2*g*1 = 1*g*2 => 2g = 2g
+        params = DoublePendulumParams(m1=1.0, m2=1.0, l1=1.0, l2=2.0, g=9.81)
+        se = saddle_energy(params)
+        # V(pi,0) = 2*9.81*1 - 1*9.81*2 = 0
+        # V(0,pi) = -2*9.81*1 + 1*9.81*2 = 0
+        assert se == pytest.approx(0.0)

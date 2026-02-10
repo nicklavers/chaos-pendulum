@@ -14,14 +14,18 @@ modify them in place.
 ### `DoublePendulumParams` (simulation.py)
 
 ```python
-@dataclass(frozen=True)
+@dataclass
 class DoublePendulumParams:
-    m1: float = 1.0    # mass of bob 1
-    m2: float = 1.0    # mass of bob 2
-    l1: float = 1.0    # length of arm 1
-    l2: float = 1.0    # length of arm 2
-    g: float = 9.81    # gravitational acceleration
+    m1: float = 1.0       # mass of bob 1
+    m2: float = 1.0       # mass of bob 2
+    l1: float = 1.0       # length of arm 1
+    l2: float = 1.0       # length of arm 2
+    g: float = 9.81       # gravitational acceleration
+    friction: float = 0.0 # linear viscous damping coefficient
 ```
+
+The `friction` parameter applies linear viscous damping (`-friction * omega`) to both
+angular accelerations. At `friction=0` the system is conservative (Hamiltonian).
 
 ### `FractalViewport` (fractal/compute.py)
 
@@ -47,7 +51,22 @@ class FractalTask:
     t_end: float
     dt: float
     n_samples: int
+    basin: bool = False   # basin mode: damped simulation, final-state display
 ```
+
+When `basin=True`, the worker computes saddle energy and enables early termination.
+
+### `BatchResult` (fractal/compute.py)
+
+```python
+class BatchResult(NamedTuple):
+    snapshots: np.ndarray        # (N, 2, n_samples) float32
+    final_velocities: np.ndarray # (N, 2) float32 [omega1, omega2]
+```
+
+Immutable result from batch simulation. Supports tuple unpacking:
+`snapshots, velocities = result`. The `final_velocities` sidecar enables
+energy-based convergence checks without finite-differencing the snapshot array.
 
 ### `CacheKey` (fractal/cache.py)
 
@@ -59,10 +78,11 @@ class CacheKey:
     center_theta2_q: int
     span_theta1_q: int
     span_theta2_q: int
-    params_hash: int          # hash of (m1, m2, l1, l2, g)
+    params_hash: int          # hash of (m1, m2, l1, l2, g, friction)
 ```
 
-Constructed via `CacheKey.from_viewport(viewport, params)`.
+Constructed via `CacheKey.from_viewport(viewport, params)`. The `params_hash`
+includes `friction` so that different damping coefficients produce different keys.
 
 ## Array Shapes
 
@@ -109,7 +129,7 @@ to functions with signature `(theta1: ndarray, theta2: ndarray) -> (N, 4) uint8`
 
 | Signal | Source | Payload |
 |--------|--------|---------|
-| `level_complete` | `FractalWorker` | `(int, np.ndarray)` — resolution, `(N, 2, n_samples)` |
+| `level_complete` | `FractalWorker` | `(int, np.ndarray, np.ndarray)` — resolution, snapshots `(N, 2, n_samples)`, final_velocities `(N, 2)` |
 | `progress` | `FractalWorker` | `(int, int)` — steps_done, total_steps |
 | `viewport_changed` | `FractalCanvas` | `FractalViewport` |
 | `ic_selected` | `FractalCanvas` | `(float, float)` — theta1, theta2 (Ctrl+click) |
@@ -123,6 +143,20 @@ to functions with signature `(theta1: ndarray, theta2: ndarray) -> (N, 4) uint8`
 | `tool_mode_changed` | `FractalControls` | `str` — "zoom", "pan", or "inspect" |
 | `angle_selection_changed` | `FractalControls` | `int` — 0 (theta1), 1 (theta2), or 2 (both) |
 | `zoom_out_clicked` | `FractalControls` | (no payload) |
+
+### Winding Number Arrays — `(N,)` int32
+
+Produced by `extract_winding_numbers()` in `fractal/winding.py`. Each value is
+`round(theta / 2pi)` — the integer number of full rotations a trajectory has
+accumulated. Used by basin mode's winding colormaps.
+
+## Key Functions
+
+### `saddle_energy(params) -> float` (fractal/compute.py)
+
+Computes the lowest saddle-point potential energy for the double pendulum.
+Below this energy, a trajectory can never change basin (winding number).
+Used by the worker to enable early termination in basin mode.
 
 ## Constants
 

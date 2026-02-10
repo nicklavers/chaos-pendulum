@@ -58,6 +58,24 @@ class TestCacheKey:
         k2 = CacheKey.from_viewport(vp, p2)
         assert k1 != k2
 
+    def test_different_friction_different_key(self):
+        """Params differing only in friction should produce different keys."""
+        vp = FractalViewport(1.0, 2.0, 3.0, 4.0, 128)
+        p1 = DoublePendulumParams(friction=0.0)
+        p2 = DoublePendulumParams(friction=0.5)
+        k1 = CacheKey.from_viewport(vp, p1)
+        k2 = CacheKey.from_viewport(vp, p2)
+        assert k1 != k2
+
+    def test_same_friction_same_key(self):
+        """Params with same friction should produce same keys."""
+        vp = FractalViewport(1.0, 2.0, 3.0, 4.0, 128)
+        p1 = DoublePendulumParams(friction=0.5)
+        p2 = DoublePendulumParams(friction=0.5)
+        k1 = CacheKey.from_viewport(vp, p1)
+        k2 = CacheKey.from_viewport(vp, p2)
+        assert k1 == k2
+
 
 class TestQuantize:
     """Test viewport coordinate quantization."""

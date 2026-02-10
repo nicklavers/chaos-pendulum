@@ -1,6 +1,6 @@
 # Simulation Engine
 
-Physics engine for the double pendulum. Lives in `simulation.py` (~114 lines).
+Physics engine for the double pendulum. Lives in `simulation.py` (~119 lines).
 
 > Cross-ref: [data-shapes.md](data-shapes.md) for `DoublePendulumParams`.
 
@@ -11,7 +11,15 @@ the `positions()` helper used by the inspect tool's stick-figure diagrams.
 
 The fractal mode uses a separate vectorized batch implementation
 ([fractal-compute.md](fractal-compute.md)) for performance. Both implement
-the same equations — a cross-validation test ensures they stay in sync.
+the same equations (including friction damping) — a cross-validation test
+ensures they stay in sync.
+
+## Friction (Viscous Damping)
+
+The `DoublePendulumParams.friction` parameter applies linear viscous damping
+to both angular accelerations: `alpha -= friction * omega`. At `friction=0`
+(default) the system is conservative (Hamiltonian). With `friction > 0`,
+energy dissipates monotonically and trajectories settle toward equilibrium.
 
 ## Key Functions
 
@@ -38,6 +46,12 @@ Coordinate convention: x increases right, y increases **down** from pivot
 
 Runs `solve_ivp` with DOP853 method. Only used in pendulum mode.
 Not used by fractal mode (too slow for batch trajectories).
+
+### `total_energy(state, params) -> float`
+
+Computes total mechanical energy (T + V) for a single state. Used for energy
+conservation monitoring and cross-validated against the batch version in
+`fractal/_numpy_backend.py`.
 
 ## Module Boundary
 

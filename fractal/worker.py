@@ -13,7 +13,7 @@ from PyQt6.QtCore import QThread, pyqtSignal
 
 from fractal.compute import (
     FractalTask, FractalViewport, ComputeBackend,
-    build_initial_conditions,
+    build_initial_conditions, saddle_energy,
 )
 
 logger = logging.getLogger(__name__)
@@ -27,7 +27,8 @@ class FractalWorker(QThread):
     RK4 loop (via cancel_check callback).
     """
 
-    level_complete = pyqtSignal(int, object)  # resolution, snapshots (np.ndarray)
+    # resolution, snapshots (np.ndarray), final_velocities (np.ndarray)
+    level_complete = pyqtSignal(int, object, object)
     progress = pyqtSignal(int, int)            # steps_done, total_steps
     all_complete = pyqtSignal()
 
@@ -53,6 +54,11 @@ class FractalWorker(QThread):
     def run(self) -> None:
         task = self._task
 
+        # Compute saddle energy for early termination (basin mode only)
+        saddle_val = None
+        if task.basin and task.params.friction > 0:
+            saddle_val = saddle_energy(task.params)
+
         for level_res in self._progressive_levels:
             if self._cancelled:
                 return
@@ -74,7 +80,7 @@ class FractalWorker(QThread):
             )
 
             try:
-                snapshots = self._backend.simulate_batch(
+                result = self._backend.simulate_batch(
                     params=task.params,
                     initial_conditions=ics,
                     t_end=task.t_end,
@@ -82,6 +88,7 @@ class FractalWorker(QThread):
                     n_samples=task.n_samples,
                     cancel_check=self._cancel_check,
                     progress_callback=lambda done, total: self.progress.emit(done, total),
+                    saddle_energy_val=saddle_val,
                 )
             except Exception:
                 logger.exception("Fractal computation failed at level %d", level_res)
@@ -90,7 +97,9 @@ class FractalWorker(QThread):
             if self._cancelled:
                 return
 
-            self.level_complete.emit(level_res, snapshots)
+            self.level_complete.emit(
+                level_res, result.snapshots, result.final_velocities,
+            )
 
         if not self._cancelled:
             self.all_complete.emit()

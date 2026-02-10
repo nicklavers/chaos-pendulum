@@ -160,6 +160,62 @@ at half-pi points.
 - `_hsl_to_bgra(h, s, l)` — HSL to BGRA conversion
 - `_hsv_to_bgra(h, s, v)` — HSV to BGRA conversion
 
+## Winding Number Path (basin mode)
+
+File: `fractal/winding.py` (~273 lines).
+
+Used in basin mode. Maps final unwrapped angles to integer winding numbers,
+then to BGRA pixels via basin-specific colormaps.
+
+```
+snapshots[:, 0, -1]   (N,) theta1 final
+snapshots[:, 1, -1]   (N,) theta2 final
+    |                    |
+    v                    v
+extract_winding_numbers()
+    |                    |
+    v                    v
+n1 (N,) int32        n2 (N,) int32      round(theta / 2pi)
+    \                  /
+     v                v
+colormap_fn(n1, n2)
+    |
+    v
+(N, 4) uint8 BGRA
+    |
+    v
+reshape to (resolution, resolution, 4)
+    |
+    v
+QImage
+```
+
+### Winding Key Functions
+
+#### `extract_winding_numbers(theta1, theta2) -> (n1, n2)` int32 arrays
+
+Rounds each unwrapped angle to the nearest integer multiple of 2pi.
+
+#### `winding_to_argb(theta1, theta2, colormap_fn, resolution) -> (res, res, 4) uint8`
+
+Full pipeline: extract winding numbers, apply colormap, reshape to grid.
+
+#### `build_winding_legend(colormap_fn, n_range, cell_size) -> ndarray`
+
+Builds a 2D legend image showing the winding number grid for the legend overlay.
+
+### Winding Colormaps
+
+Registry: `WINDING_COLORMAPS: dict[str, Callable]` in `fractal/winding.py`.
+
+All functions have signature `(n1: ndarray[int32], n2: ndarray[int32]) -> (N, 4) uint8 BGRA`.
+
+| Name | Description |
+|------|-------------|
+| Direction + Brightness | Hue from atan2(n1,n2), brightness from distance to origin |
+| Modular Grid (5x5) | 5x5 repeating color grid, each cell a distinct hue |
+| Basin Hash | Hash-based coloring for maximum adjacent-basin contrast |
+
 ## Frame Latency
 
 Univariate: interpolation (<0.1ms) + LUT lookup (~2-3ms) +
@@ -167,3 +223,6 @@ QImage rebuild (~5ms) = **< 10ms** (60fps capable).
 
 Bivariate: interpolation x2 (<0.2ms) + colormap function (~3-5ms) +
 QImage rebuild (~5ms) = **< 10ms** (60fps capable, verified by benchmark tests).
+
+Winding: extraction (<0.1ms) + colormap (<1ms) + QImage rebuild (~5ms) =
+**< 10ms**. No time interpolation needed (basin mode displays final state only).

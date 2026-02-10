@@ -15,8 +15,9 @@ from PyQt6.QtWidgets import (
 from fractal.compute import DEFAULT_N_SAMPLES
 from fractal.coloring import COLORMAPS
 from fractal.bivariate import TORUS_COLORMAPS
+from fractal.winding import WINDING_COLORMAPS
 from fractal.pendulum_diagram import PendulumDiagram
-from ui_common import PhysicsParamsWidget
+from ui_common import PhysicsParamsWidget, slider_value
 
 
 class FractalControls(QWidget):
@@ -32,6 +33,8 @@ class FractalControls(QWidget):
     tool_mode_changed = pyqtSignal(str)  # "zoom", "pan", or "inspect"
     angle_selection_changed = pyqtSignal(int)  # 0 = theta1, 1 = theta2, 2 = both
     torus_colormap_changed = pyqtSignal(str)
+    display_mode_changed = pyqtSignal(str)        # "angle" or "basin"
+    winding_colormap_changed = pyqtSignal(str)    # winding colormap name
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -44,7 +47,8 @@ class FractalControls(QWidget):
         main_layout.setContentsMargins(8, 8, 8, 8)
 
         # --- Time Slider ---
-        time_group = QGroupBox("Time")
+        self._time_group = QGroupBox("Time")
+        time_group = self._time_group
         time_layout = QVBoxLayout()
         time_group.setLayout(time_layout)
 
@@ -169,7 +173,29 @@ class FractalControls(QWidget):
         display_layout = QGridLayout()
         display_group.setLayout(display_layout)
 
-        display_layout.addWidget(QLabel("Colormap:"), 0, 0)
+        # Display mode toggle: Angle vs Basin
+        display_layout.addWidget(QLabel("Mode:"), 0, 0)
+        mode_row = QHBoxLayout()
+        self._angle_mode_btn = QPushButton("Angle")
+        self._angle_mode_btn.setCheckable(True)
+        self._angle_mode_btn.setChecked(True)
+        self._basin_mode_btn = QPushButton("Basin")
+        self._basin_mode_btn.setCheckable(True)
+
+        self._display_mode_group = QButtonGroup(self)
+        self._display_mode_group.setExclusive(True)
+        self._display_mode_group.addButton(self._angle_mode_btn)
+        self._display_mode_group.addButton(self._basin_mode_btn)
+
+        mode_row.addWidget(self._angle_mode_btn)
+        mode_row.addWidget(self._basin_mode_btn)
+        mode_row.addStretch()
+
+        mode_container = QWidget()
+        mode_container.setLayout(mode_row)
+        display_layout.addWidget(mode_container, 0, 1)
+
+        display_layout.addWidget(QLabel("Colormap:"), 1, 0)
         self.colormap_combo = QComboBox()
         # Initially populated with torus colormaps (matching default "Both" angle)
         for name in TORUS_COLORMAPS:
@@ -177,27 +203,29 @@ class FractalControls(QWidget):
         ybgm_idx = self.colormap_combo.findText("RGB Aligned + YBGM")
         if ybgm_idx >= 0:
             self.colormap_combo.setCurrentIndex(ybgm_idx)
-        display_layout.addWidget(self.colormap_combo, 0, 1)
+        display_layout.addWidget(self.colormap_combo, 1, 1)
 
-        display_layout.addWidget(QLabel("Display angle:"), 1, 0)
+        self._angle_label = QLabel("Display angle:")
+        display_layout.addWidget(self._angle_label, 2, 0)
         self.angle_combo = QComboBox()
         self.angle_combo.addItem("\u03b8\u2082 (bob 2)", 1)
         self.angle_combo.addItem("\u03b8\u2081 (bob 1)", 0)
         self.angle_combo.addItem("Both (\u03b8\u2081, \u03b8\u2082)", 2)
         self.angle_combo.setCurrentIndex(2)  # default: Both
-        display_layout.addWidget(self.angle_combo, 1, 1)
+        display_layout.addWidget(self.angle_combo, 2, 1)
 
-        display_layout.addWidget(QLabel("Resolution:"), 2, 0)
+        display_layout.addWidget(QLabel("Resolution:"), 4, 0)
         self.resolution_combo = QComboBox()
         for res in [64, 128, 256, 512]:
             self.resolution_combo.addItem(f"{res}x{res}", res)
         self.resolution_combo.setCurrentIndex(2)  # default 256x256
-        display_layout.addWidget(self.resolution_combo, 2, 1)
+        display_layout.addWidget(self.resolution_combo, 4, 1)
 
         main_layout.addWidget(display_group)
 
         # --- Simulation ---
-        sim_group = QGroupBox("Simulation")
+        self._sim_group = QGroupBox("Simulation")
+        sim_group = self._sim_group
         sim_layout = QGridLayout()
         sim_group.setLayout(sim_layout)
 
@@ -244,11 +272,15 @@ class FractalControls(QWidget):
             self.physics_params.m2_slider,
             self.physics_params.l1_slider,
             self.physics_params.l2_slider,
+            self.physics_params.friction_slider,
         ]:
             sl.valueChanged.connect(self._on_physics_changed)
 
         # Tool mode toggle
         self._tool_group.buttonClicked.connect(self._on_tool_changed)
+
+        # Display mode toggle
+        self._display_mode_group.buttonClicked.connect(self._on_display_mode_changed)
 
         # Zoom out button
         self.zoom_out_btn.clicked.connect(self._on_zoom_out_clicked)
@@ -318,6 +350,22 @@ class FractalControls(QWidget):
         t = frac * t_end
         self.time_label.setText(f"t = {t:.1f} s")
 
+    def get_display_mode(self) -> str:
+        """Return 'angle' or 'basin'."""
+        if self._basin_mode_btn.isChecked():
+            return "basin"
+        return "angle"
+
+    def set_friction(self, value: float) -> None:
+        """Programmatically set the friction slider value."""
+        self.physics_params.friction_slider.setValue(
+            int(value * self.physics_params.friction_slider.resolution)
+        )
+
+    def get_friction(self) -> float:
+        """Read current friction value from the slider."""
+        return slider_value(self.physics_params.friction_slider)
+
     # -- Callbacks --
 
     def _on_time_slider_changed(self, value):
@@ -333,7 +381,9 @@ class FractalControls(QWidget):
     def _on_colormap_changed(self, name):
         if self._building:
             return
-        if self.angle_combo.currentData() == 2:
+        if self.get_display_mode() == "basin":
+            self.winding_colormap_changed.emit(name)
+        elif self.angle_combo.currentData() == 2:
             self.torus_colormap_changed.emit(name)
         else:
             self.colormap_changed.emit(name)
@@ -389,6 +439,49 @@ class FractalControls(QWidget):
 
     def _on_zoom_out_clicked(self):
         self.zoom_out_clicked.emit()
+
+    def _on_display_mode_changed(self, button):
+        """Handle Angle/Basin toggle click."""
+        if self._building:
+            return
+        mode = "basin" if button is self._basin_mode_btn else "angle"
+        self._apply_display_mode(mode)
+        self.display_mode_changed.emit(mode)
+
+    def _apply_display_mode(self, mode: str) -> None:
+        """Show/hide UI elements based on display mode."""
+        self._building = True
+
+        if mode == "basin":
+            # Hide time group (no scrubbing in basin mode)
+            self._time_group.setVisible(False)
+            # Hide simulation group (t_end auto-computed)
+            self._sim_group.setVisible(False)
+            # Disable angle combo (irrelevant in basin mode)
+            self.angle_combo.setEnabled(False)
+            self._angle_label.setEnabled(False)
+            # Auto-set friction to 0.5 if currently zero
+            if self.get_friction() < 0.01:
+                self.set_friction(0.5)
+            # Swap colormap dropdown to winding colormaps
+            current_text = self.colormap_combo.currentText()
+            self.colormap_combo.clear()
+            for name in WINDING_COLORMAPS:
+                self.colormap_combo.addItem(name)
+            idx = self.colormap_combo.findText(current_text)
+            if idx >= 0:
+                self.colormap_combo.setCurrentIndex(idx)
+        else:
+            # Show time group and simulation group
+            self._time_group.setVisible(True)
+            self._sim_group.setVisible(True)
+            # Enable angle combo
+            self.angle_combo.setEnabled(True)
+            self._angle_label.setEnabled(True)
+            # Swap colormap dropdown back based on angle selection
+            self._update_colormap_options(self.angle_combo.currentData())
+
+        self._building = False
 
     def _on_t_end_changed(self, value):
         self.t_end_label.setText(f"{value} s")

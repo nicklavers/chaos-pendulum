@@ -1,7 +1,7 @@
 # Workers
 
 Thread architecture, signals, and cancellation patterns. Files:
-`fractal/worker.py` (~96 lines), `fractal/view.py` (~348 lines).
+`fractal/worker.py` (~105 lines), `fractal/view.py` (~404 lines).
 
 > Cross-ref: [data-shapes.md](data-shapes.md) for signal payloads.
 > Cross-ref: [fractal-compute.md](fractal-compute.md) for progressive levels.
@@ -14,11 +14,14 @@ Runs the progressive computation pipeline in a background thread.
 
 1. Created with a `FractalTask`, a `ComputeBackend`, and a list of progressive
    resolution levels
-2. Iterates through levels, calling `simulate_batch()` for each
-3. Emits `level_complete(resolution, snapshots)` after each level
-4. Emits `progress(steps_done, total_steps)` during computation
-5. Emits `all_complete()` when all levels finish
-6. Thread exits → `finished` signal
+2. If `task.basin` and `task.params.friction > 0`, computes `saddle_energy(params)`
+   for early termination
+3. Iterates through levels, calling `simulate_batch()` for each (passing
+   `saddle_energy_val` when in basin mode)
+4. Emits `level_complete(resolution, snapshots, final_velocities)` after each level
+5. Emits `progress(steps_done, total_steps)` during computation
+6. Emits `all_complete()` when all levels finish
+7. Thread exits → `finished` signal
 
 ### Cancellation
 
@@ -74,7 +77,7 @@ Retired workers clean themselves up via their `finished` signal.
 
 ### Worker Signal Handlers
 
-- `_on_level_complete(resolution, snapshots)`: cache the result, display it
+- `_on_level_complete(resolution, snapshots, final_velocities)`: cache the result, display it
 - `_on_progress(steps_done, total_steps)`: update loading overlay percentage
 - `_on_all_complete()`: stop loading overlay, activate pending ghost rectangle
 - `_on_worker_finished()`: clear worker reference if it's still the current one

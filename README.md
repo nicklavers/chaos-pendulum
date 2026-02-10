@@ -24,8 +24,10 @@ Animate individual double pendulum trajectories with real-time rendering:
 
 Visualize how pendulum behavior varies across a grid of initial conditions. Each pixel represents a different starting (theta1, theta2) pair; color encodes the evolved state at a chosen time.
 
-- **Bivariate display** (default): colors both angles simultaneously using torus colormaps that respect the 2pi-periodic topology of the state space
-- **Univariate display**: colors a single angle via 1D LUT colormaps (HSV hue wheel, Twilight)
+- **Angle mode** (default): scrub through time to see how each trajectory evolves
+  - **Bivariate display**: colors both angles simultaneously using torus colormaps that respect the 2pi-periodic topology of the state space
+  - **Univariate display**: colors a single angle via 1D LUT colormaps (HSV hue wheel, Twilight)
+- **Basin mode**: adds friction to damp trajectories, then maps each pixel to its final winding number (how many full rotations each arm completed). Energy-based early termination freezes trajectories that can never change basin, significantly speeding up computation.
 - Pan, zoom, and scrub through time with smooth animation
 - Inspect tool: hover over any pixel to see the pendulum configuration at that initial condition
 - Progressive rendering at multiple resolution levels (64, 128, 256, 512)
@@ -146,16 +148,20 @@ The coupled second-order ODEs are rewritten as four first-order ODEs by introduc
 - **Pendulum mode**: integrated using SciPy's `solve_ivp` with the DOP853 (8th-order Dormand-Prince) adaptive step-size method.
 - **Fractal mode**: uses a custom vectorized RK4 integrator that advances thousands of trajectories in parallel via NumPy broadcasting. An optional Numba JIT backend provides ~5x additional speedup.
 
+### Friction (viscous damping)
+
+An optional friction parameter applies linear viscous damping (`alpha -= friction * omega`) to both angular accelerations. With friction=0 (default), the system is conservative. With friction > 0, energy dissipates monotonically and trajectories settle toward equilibrium. Basin mode uses this to map the state space by final resting position.
+
 ### Why it's chaotic
 
-The double pendulum is a Hamiltonian system -- total energy is conserved, and there is no dissipation. Despite being fully deterministic, the system exhibits sensitive dependence on initial conditions: two trajectories starting with an angular difference as small as 1e-9 radians will diverge exponentially, with the Lyapunov exponent characterizing the rate of separation. This is the hallmark of deterministic chaos, and the reason the long-term behavior of a double pendulum is effectively unpredictable.
+The undamped double pendulum is a Hamiltonian system -- total energy is conserved, and there is no dissipation. Despite being fully deterministic, the system exhibits sensitive dependence on initial conditions: two trajectories starting with an angular difference as small as 1e-9 radians will diverge exponentially, with the Lyapunov exponent characterizing the rate of separation. This is the hallmark of deterministic chaos, and the reason the long-term behavior of a double pendulum is effectively unpredictable.
 
 ## Project structure
 
 ```
 chaos-pendulum/
     main.py                  Entry point, creates AppWindow
-    simulation.py            Physics engine (Lagrangian equations of motion)
+    simulation.py            Physics engine (Lagrangian equations + friction)
     app_window.py            QStackedWidget, mode switching, param sync
     ui_common.py             Shared widgets (LoadingOverlay, PhysicsParamsWidget)
 
@@ -170,14 +176,15 @@ chaos-pendulum/
         view.py              FractalView: orchestration, signal wiring
         bivariate.py         Torus colormaps for dual-angle display
         coloring.py          Univariate coloring (HSV LUT, angle-to-ARGB)
-        compute.py           ComputeBackend protocol, grid builder
-        _numpy_backend.py    Vectorized NumPy RK4
-        _numba_backend.py    Numba JIT parallel RK4 (optional)
+        compute.py           ComputeBackend protocol, BatchResult, saddle energy
+        _numpy_backend.py    Vectorized NumPy RK4 (+ energy freeze logic)
+        _numba_backend.py    Numba JIT parallel RK4 (+ energy freeze logic)
         cache.py             LRU fractal cache with memory tracking
         worker.py            QThread worker for background computation
+        winding.py           Winding number extraction + basin colormaps
         pendulum_diagram.py  Stick-figure pendulum widget (inspect tool)
 
-    tests/                   pytest test suite (209 tests)
+    tests/                   pytest test suite (273 tests)
     docs/                    Living specs and architecture decision records
     requirements.txt         Python dependencies (numpy, scipy, PyQt6)
 ```

@@ -8,8 +8,9 @@ Three backends are auto-selected via try/except ImportError:
 from __future__ import annotations
 
 import logging
+import math
 from dataclasses import dataclass
-from typing import Protocol
+from typing import NamedTuple, Protocol
 
 import numpy as np
 
@@ -19,6 +20,16 @@ logger = logging.getLogger(__name__)
 
 # Default number of angle snapshots to store per trajectory
 DEFAULT_N_SAMPLES = 96
+
+
+class BatchResult(NamedTuple):
+    """Immutable result from a batch simulation.
+
+    Supports tuple unpacking: ``snapshots, velocities = result``.
+    """
+
+    snapshots: np.ndarray        # (N, 2, n_samples) float32
+    final_velocities: np.ndarray  # (N, 2) float32 [omega1, omega2]
 
 
 @dataclass(frozen=True)
@@ -41,6 +52,7 @@ class FractalTask:
     t_end: float
     dt: float
     n_samples: int
+    basin: bool = False
 
 
 class ComputeBackend(Protocol):
@@ -55,8 +67,14 @@ class ComputeBackend(Protocol):
         n_samples: int,
         cancel_check: callable | None = None,
         progress_callback: callable | None = None,
-    ) -> np.ndarray:  # (N, 2, n_samples) float32, unwrapped [theta1, theta2]
-        """Simulate N trajectories and return angle snapshots."""
+        saddle_energy_val: float | None = None,
+    ) -> BatchResult:
+        """Simulate N trajectories and return angle snapshots + final velocities.
+
+        When saddle_energy_val is provided and friction > 0, trajectories whose
+        total energy drops below this threshold are frozen early (their angles
+        can never change basin).
+        """
         ...
 
 
@@ -93,6 +111,24 @@ def build_initial_conditions(viewport: FractalViewport) -> np.ndarray:
     # omega1, omega2 = 0 (already zeros)
 
     return ics
+
+
+def saddle_energy(params: DoublePendulumParams) -> float:
+    """Compute the lowest saddle-point potential energy for a double pendulum.
+
+    Two candidate saddle configurations (at rest, omega=0):
+      - theta1=pi, theta2=0: V = +(m1+m2)*g*l1 - m2*g*l2
+      - theta1=0, theta2=pi: V = -(m1+m2)*g*l1 + m2*g*l2
+
+    Returns the minimum, which is the energy barrier below which a
+    trajectory can never change basin.
+    """
+    m1, m2, l1, l2, g = params.m1, params.m2, params.l1, params.l2, params.g
+    # V(a,b) = -(m1+m2)*g*l1*cos(a) - m2*g*l2*cos(b)
+    # cos(pi) = -1, cos(0) = 1
+    v_pi_0 = (m1 + m2) * g * l1 - m2 * g * l2
+    v_0_pi = -(m1 + m2) * g * l1 + m2 * g * l2
+    return min(v_pi_0, v_0_pi)
 
 
 def get_default_backend() -> ComputeBackend:

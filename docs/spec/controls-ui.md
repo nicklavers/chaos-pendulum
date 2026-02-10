@@ -1,6 +1,6 @@
 # Controls UI
 
-Controls panel for fractal mode. File: `fractal/controls.py` (~419 lines).
+Controls panel for fractal mode. File: `fractal/controls.py` (~512 lines).
 
 > Cross-ref: [data-shapes.md](data-shapes.md) for signal payloads.
 > Cross-ref: [inspect-tool.md](inspect-tool.md) for the inspect panel.
@@ -68,11 +68,23 @@ Emits `resolution_changed(int)`.
 
 Emits `zoom_out_clicked`. Canvas handles the actual zoom-out logic.
 
+### Display Mode Toggle
+
+Toggle button to switch between angle mode and basin mode:
+- **Angle mode** (default): time-scrubbing display, shows evolved angle at chosen time
+- **Basin mode**: damped simulation, shows final winding numbers with friction-based coloring
+
+When basin mode is active, time controls are hidden and the colormap dropdown
+switches to winding colormaps. A friction slider appears for adjusting the
+damping coefficient.
+
+Emits `display_mode_changed(str)` with "angle" or "basin".
+
 ### Physics Parameters
 
 Collapsible section containing `PhysicsParamsWidget` (from `ui_common.py`).
-Sliders for m1, m2, l1, l2, g. Note: "Changing physics will recompute the
-fractal" — discourages casual adjustment of expensive parameters.
+Sliders for m1, m2, l1, l2, g, and friction. Note: "Changing physics will
+recompute the fractal" — discourages casual adjustment of expensive parameters.
 
 Emits `physics_changed` (no payload).
 

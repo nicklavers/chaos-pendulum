@@ -19,6 +19,7 @@ class DoublePendulumParams:
     l1: float = 1.0
     l2: float = 1.0
     g: float = 9.81
+    friction: float = 0.0
 
 
 def derivatives(t, state, params):
@@ -48,6 +49,10 @@ def derivatives(t, state, params):
         + m2 * l2 * omega2**2 * sin_delta * cos_delta
         - (m1 + m2) * g * np.sin(theta2)
     ) / (l2 * denom)
+
+    # Linear viscous damping
+    alpha1 = alpha1 - params.friction * omega1
+    alpha2 = alpha2 - params.friction * omega2
 
     return [omega1, omega2, alpha1, alpha2]
 

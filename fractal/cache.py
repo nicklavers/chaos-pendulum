@@ -28,7 +28,7 @@ def _quantize(value: float) -> int:
 
 def _params_hash(params: DoublePendulumParams) -> int:
     """Compute a stable hash for physics parameters."""
-    return hash((params.m1, params.m2, params.l1, params.l2, params.g))
+    return hash((params.m1, params.m2, params.l1, params.l2, params.g, params.friction))
 
 
 @dataclass(frozen=True)
