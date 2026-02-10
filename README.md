@@ -1,25 +1,53 @@
 # Chaos Pendulum
 
-An interactive double pendulum simulation for exploring chaotic dynamics and sensitive dependence on initial conditions.
+An interactive double pendulum simulator and fractal explorer for visualizing chaotic dynamics and sensitive dependence on initial conditions.
 
 ## What is a double pendulum?
 
 A double pendulum is one of the simplest physical systems that exhibits chaotic behavior. Two rigid arms connected by frictionless pivots follow deterministic equations of motion, yet tiny differences in starting position lead to wildly divergent trajectories. This project lets you see that divergence in real time.
 
-## Features
+## Modes
 
-- Real-time simulation of double pendulum dynamics using Lagrangian mechanics
+The application has two modes, accessible via the sidebar toggle:
+
+### Pendulum Mode
+
+Animate individual double pendulum trajectories with real-time rendering:
+
 - Interactive controls for initial angles, angular velocities, masses, and arm lengths
 - Phase space visualization (angle vs. angular velocity)
 - Trace overlay showing the trajectory of the outer bob
-- Side-by-side comparison of nearby initial conditions to demonstrate chaotic sensitivity
+- Side-by-side comparison of nearby initial conditions
 - Energy conservation monitoring
+
+### Fractal Explorer
+
+Visualize how pendulum behavior varies across a grid of initial conditions. Each pixel represents a different starting (theta1, theta2) pair; color encodes the evolved state at a chosen time.
+
+- **Bivariate display** (default): colors both angles simultaneously using torus colormaps that respect the 2pi-periodic topology of the state space
+- **Univariate display**: colors a single angle via 1D LUT colormaps (HSV hue wheel, Twilight)
+- Pan, zoom, and scrub through time with smooth animation
+- Inspect tool: hover over any pixel to see the pendulum configuration at that initial condition
+- Progressive rendering at multiple resolution levels (64, 128, 256, 512)
+- LRU cache for previously computed zoom levels
+
+#### Torus colormaps
+
+The fractal explorer includes 9 torus colormaps for bivariate display. The default, **RGB Aligned + YBGM**, uses a landmark-aligned RGB sinusoid formula that places physically meaningful colors at key state-space positions:
+
+- **Black** at (0, 0) -- both bobs hanging straight down
+- **White** at (pi, 0) -- bob 1 horizontal, bob 2 down
+- **Red** at (pi, pi) -- both bobs horizontal
+- **Cyan** at (0, pi) -- bob 1 down, bob 2 horizontal
+- **Yellow, Blue, Magenta, Green** at the four diagonal half-pi points
+
+Other torus colormaps offer different visual tradeoffs, from clean checkerboard patterns (Yellow/Blue, Green/Magenta) to full 16-landmark coverage (6-Color) to hue-based and warm/cool schemes.
 
 ## Getting started
 
 ### Prerequisites
 
-- Python 3.10+
+- Python 3.9+
 
 ### Installation
 
@@ -31,10 +59,23 @@ source .venv/bin/activate
 pip install -r requirements.txt
 ```
 
+Optional: install [Numba](https://numba.pydata.org/) for faster fractal computation (~5x speedup):
+
+```bash
+pip install numba
+```
+
 ### Run
 
 ```bash
 python main.py
+```
+
+### Tests
+
+```bash
+pip install pytest pytest-cov
+python -m pytest tests/ -v
 ```
 
 ## Physics
@@ -100,46 +141,70 @@ where `delta = theta1 - theta2` and `alpha` denotes angular acceleration.
 
 ### Numerical integration
 
-The coupled second-order ODEs are rewritten as four first-order ODEs by introducing omega1 and omega2 as independent state variables. This system is integrated using SciPy's `solve_ivp` with the RK45 (Dormand-Prince) adaptive step-size method, which adjusts the time step to maintain accuracy while keeping computation efficient.
+The coupled second-order ODEs are rewritten as four first-order ODEs by introducing omega1 and omega2 as independent state variables.
+
+- **Pendulum mode**: integrated using SciPy's `solve_ivp` with the DOP853 (8th-order Dormand-Prince) adaptive step-size method.
+- **Fractal mode**: uses a custom vectorized RK4 integrator that advances thousands of trajectories in parallel via NumPy broadcasting. An optional Numba JIT backend provides ~5x additional speedup.
 
 ### Why it's chaotic
 
 The double pendulum is a Hamiltonian system -- total energy is conserved, and there is no dissipation. Despite being fully deterministic, the system exhibits sensitive dependence on initial conditions: two trajectories starting with an angular difference as small as 1e-9 radians will diverge exponentially, with the Lyapunov exponent characterizing the rate of separation. This is the hallmark of deterministic chaos, and the reason the long-term behavior of a double pendulum is effectively unpredictable.
 
-## References
-
-### Lagrangian derivation
-
-- [Diego Assencio — Double pendulum: Lagrangian formulation](https://dassencio.org/33) — Step-by-step derivation of the Lagrangian for point masses on massless rods.
-- [LSU Physics (Gabriela Gonzalez) — Double Pendulum lecture notes (PDF)](https://www.phys.lsu.edu/faculty/gonzalez/Teaching/Phys7221/DoublePendulum.pdf) — Graduate-level derivation from a university course.
-- [Wikipedia — Double pendulum](https://en.wikipedia.org/wiki/Double_pendulum) — Standard reference with both the simple (point mass) and compound pendulum variants.
-
-### Equations of motion
-
-- [myPhysicsLab — Double Pendulum](https://www.myphysicslab.com/pendulum/double-pendulum-en.html) — Derives the coupled angular acceleration equations with an interactive simulation. Also has a [detailed PDF derivation](https://www.myphysicslab.com/develop/docs/Double_Pendulum.pdf).
-- [Eric Weisstein's World of Physics — Double Pendulum](https://scienceworld.wolfram.com/physics/DoublePendulum.html) — Compact reference with the standard equations of motion.
-- [UC Berkeley — The Double Pendulum](https://rotations.berkeley.edu/the-double-pendulum/) — Clean derivation from a university physics course.
-
-### Chaos and Lyapunov exponents
-
-- [Shinbrot et al. — "Chaos in a double pendulum" (American Journal of Physics, 1992)](https://yorke.umd.edu/Yorke_papers_most_cited_and_post2000/1992-04-Wisdom_Shinbrot_AmerJPhys_double_pendulum.pdf) — The classic paper. Measures Lyapunov exponent experimentally at 7.5 +/- 1.5 s^-1, confirming exponential divergence of nearby trajectories.
-- [SciELO — "Deterministic chaos: A pedagogical review of the double pendulum case"](https://www.scielo.br/j/rbef/a/SsWk5qnzBgvmYB4hRtkbwqM/?lang=en) — Peer-reviewed pedagogical paper covering sensitive dependence, Lyapunov exponents, and phase space structure.
-- [Kyle Monette — "Double Pendulum: Lagrangian Mechanics and Chaos" (PDF)](https://kylemonette.github.io/files/mccnny-2022.pdf) — Undergraduate research paper tying together the Lagrangian derivation and chaotic analysis.
-
-### Numerical methods
-
-- [SciPython — The double pendulum](https://scipython.com/blog/the-double-pendulum/) — Python implementation using the same RK45 / `solve_ivp` approach, with identical equations of motion.
-
 ## Project structure
 
 ```
 chaos-pendulum/
-  main.py              # Entry point
-  simulation.py        # Double pendulum equations of motion and integrator
-  visualization.py     # Real-time rendering and phase space plots
-  requirements.txt     # Python dependencies
-  README.md
+    main.py                  Entry point, creates AppWindow
+    simulation.py            Physics engine (Lagrangian equations of motion)
+    app_window.py            QStackedWidget, mode switching, param sync
+    ui_common.py             Shared widgets (LoadingOverlay, PhysicsParamsWidget)
+
+    pendulum/                Pendulum animation mode
+        canvas.py            Real-time pendulum rendering
+        controls.py          Pendulum control panel
+        view.py              Orchestration and simulation worker
+
+    fractal/                 Fractal explorer mode
+        canvas.py            FractalCanvas: QImage, pan/zoom, axes, legends
+        controls.py          Time slider, colormap, resolution, inspect panel
+        view.py              FractalView: orchestration, signal wiring
+        bivariate.py         Torus colormaps for dual-angle display
+        coloring.py          Univariate coloring (HSV LUT, angle-to-ARGB)
+        compute.py           ComputeBackend protocol, grid builder
+        _numpy_backend.py    Vectorized NumPy RK4
+        _numba_backend.py    Numba JIT parallel RK4 (optional)
+        cache.py             LRU fractal cache with memory tracking
+        worker.py            QThread worker for background computation
+        pendulum_diagram.py  Stick-figure pendulum widget (inspect tool)
+
+    tests/                   pytest test suite (209 tests)
+    docs/                    Living specs and architecture decision records
+    requirements.txt         Python dependencies (numpy, scipy, PyQt6)
 ```
+
+## References
+
+### Lagrangian derivation
+
+- [Diego Assencio -- Double pendulum: Lagrangian formulation](https://dassencio.org/33)
+- [LSU Physics (Gabriela Gonzalez) -- Double Pendulum lecture notes (PDF)](https://www.phys.lsu.edu/faculty/gonzalez/Teaching/Phys7221/DoublePendulum.pdf)
+- [Wikipedia -- Double pendulum](https://en.wikipedia.org/wiki/Double_pendulum)
+
+### Equations of motion
+
+- [myPhysicsLab -- Double Pendulum](https://www.myphysicslab.com/pendulum/double-pendulum-en.html)
+- [Eric Weisstein's World of Physics -- Double Pendulum](https://scienceworld.wolfram.com/physics/DoublePendulum.html)
+- [UC Berkeley -- The Double Pendulum](https://rotations.berkeley.edu/the-double-pendulum/)
+
+### Chaos and Lyapunov exponents
+
+- [Shinbrot et al. -- "Chaos in a double pendulum" (American Journal of Physics, 1992)](https://yorke.umd.edu/Yorke_papers_most_cited_and_post2000/1992-04-Wisdom_Shinbrot_AmerJPhys_double_pendulum.pdf)
+- [SciELO -- "Deterministic chaos: A pedagogical review of the double pendulum case"](https://www.scielo.br/j/rbef/a/SsWk5qnzBgvmYB4hRtkbwqM/?lang=en)
+- [Kyle Monette -- "Double Pendulum: Lagrangian Mechanics and Chaos" (PDF)](https://kylemonette.github.io/files/mccnny-2022.pdf)
+
+### Numerical methods
+
+- [SciPython -- The double pendulum](https://scipython.com/blog/the-double-pendulum/)
 
 ## License
 
