@@ -197,10 +197,10 @@ def torus_rgb_sinusoid_aligned(
     so that the four pure-color landmarks sit at physically meaningful
     positions:
 
-        Red   (255,  0,  0) at (pi, pi) — both bobs horizontal
+        Red   (255,  0,  0) at (pi, pi) — both bobs inverted
         Black (  0,  0,  0) at ( 0,  0) — both bobs hanging down
-        Cyan  (  0,255,255) at ( 0, pi) — bob 1 down, bob 2 horizontal
-        White (255,255,255) at (pi,  0) — bob 1 horizontal, bob 2 down
+        Cyan  (  0,255,255) at ( 0, pi) — bob 1 down, bob 2 inverted
+        White (255,255,255) at (pi,  0) — bob 1 inverted, bob 2 down
 
     Formulas (shifted by t1 - pi/2 and simplified):
         R = 128 + 127 * sin(t1 - pi/2)

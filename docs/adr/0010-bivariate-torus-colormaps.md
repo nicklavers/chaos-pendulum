@@ -18,7 +18,7 @@ Key constraints:
 - Must produce visually distinct colors for different (theta1, theta2) pairs
 - Must run in < 10ms for 256x256 (65,536 pixels) to keep scrubbing smooth
 - Ideally, landmark colors should align with physically meaningful state-space
-  positions (e.g. both-bobs-down at (0,0), both-horizontal at (pi,pi))
+  positions (e.g. both-bobs-down at (0,0), both-inverted at (pi,pi))
 
 ## Decision
 

@@ -36,9 +36,9 @@ Visualize how pendulum behavior varies across a grid of initial conditions. Each
 The fractal explorer includes 9 torus colormaps for bivariate display. The default, **RGB Aligned + YBGM**, uses a landmark-aligned RGB sinusoid formula that places physically meaningful colors at key state-space positions:
 
 - **Black** at (0, 0) -- both bobs hanging straight down
-- **White** at (pi, 0) -- bob 1 horizontal, bob 2 down
-- **Red** at (pi, pi) -- both bobs horizontal
-- **Cyan** at (0, pi) -- bob 1 down, bob 2 horizontal
+- **White** at (pi, 0) -- bob 1 inverted, bob 2 down
+- **Red** at (pi, pi) -- both bobs inverted
+- **Cyan** at (0, pi) -- bob 1 down, bob 2 inverted
 - **Yellow, Blue, Magenta, Green** at the four diagonal half-pi points
 
 Other torus colormaps offer different visual tradeoffs, from clean checkerboard patterns (Yellow/Blue, Green/Magenta) to full 16-landmark coverage (6-Color) to hue-based and warm/cool schemes.
