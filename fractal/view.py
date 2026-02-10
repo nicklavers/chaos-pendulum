@@ -83,6 +83,7 @@ class FractalView(QWidget):
         self.controls.time_index_changed.connect(self._on_time_index_changed)
         self.controls.colormap_changed.connect(self._on_colormap_changed)
         self.controls.angle_selection_changed.connect(self._on_angle_changed)
+        self.controls.torus_colormap_changed.connect(self._on_torus_colormap_changed)
         self.controls.resolution_changed.connect(self._on_resolution_changed)
         self.controls.physics_changed.connect(self._on_physics_changed)
         self.controls.t_end_changed.connect(self._on_t_end_changed)
@@ -266,6 +267,10 @@ class FractalView(QWidget):
     def _on_angle_changed(self, angle_index: int) -> None:
         """Angle display selection changed."""
         self.canvas.set_angle_index(angle_index)
+
+    def _on_torus_colormap_changed(self, name: str) -> None:
+        """Torus colormap dropdown changed."""
+        self.canvas.set_torus_colormap(name)
 
     def _on_resolution_changed(self, resolution: int) -> None:
         """Resolution dropdown changed: recompute at new resolution."""

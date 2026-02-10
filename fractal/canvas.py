@@ -22,6 +22,10 @@ from fractal.coloring import (
     interpolate_angle, angle_to_argb, numpy_to_qimage,
     build_hue_lut, DEFAULT_LUT_SIZE, COLORMAPS,
 )
+from fractal.bivariate import (
+    bivariate_to_argb, build_torus_legend, TORUS_COLORMAPS,
+    torus_rgb_aligned_ybgm,
+)
 
 
 # Zoom limits
@@ -145,7 +149,13 @@ class FractalCanvas(QWidget):
         # Color mapping
         self._lut = build_hue_lut()
         self._colormap_name = "HSV Hue Wheel"
-        self._angle_index = 1  # 0 = theta1, 1 = theta2
+        self._angle_index = 2  # 0 = theta1, 1 = theta2, 2 = both
+
+        # Torus (bivariate) colormap state
+        self._torus_colormap_name = "RGB Aligned + YBGM"
+        self._torus_colormap_fn = torus_rgb_aligned_ybgm
+        self._cached_torus_legend_name: str | None = None
+        self._cached_torus_legend_image = None
 
         # Tool mode
         self._tool_mode = TOOL_ZOOM
@@ -208,11 +218,25 @@ class FractalCanvas(QWidget):
                 self._rebuild_image()
 
     def set_angle_index(self, index: int) -> None:
-        """Change which angle (0=theta1, 1=theta2) is displayed and refresh."""
-        if index not in (0, 1):
+        """Change which angle is displayed and refresh.
+
+        Args:
+            index: 0=theta1, 1=theta2, 2=both (bivariate torus).
+        """
+        if index not in (0, 1, 2):
             return
         self._angle_index = index
         if self._current_snapshots is not None:
+            self._rebuild_image()
+
+    def set_torus_colormap(self, name: str) -> None:
+        """Change the active torus colormap and refresh."""
+        if name not in TORUS_COLORMAPS:
+            return
+        self._torus_colormap_name = name
+        self._torus_colormap_fn = TORUS_COLORMAPS[name]
+        self._cached_torus_legend_name = None  # invalidate legend cache
+        if self._angle_index == 2 and self._current_snapshots is not None:
             self._rebuild_image()
 
     def set_resolution(self, resolution: int) -> None:
@@ -309,12 +333,23 @@ class FractalCanvas(QWidget):
         if self._current_snapshots is None:
             return
 
-        # Extract angle slice from (N, 2, n_samples) snapshots
-        angle_snapshots = self._current_snapshots[:, self._angle_index, :]
-        angles = interpolate_angle(angle_snapshots, self._time_index)
-        res = int(math.sqrt(angles.shape[0]))
+        if self._angle_index == 2:
+            # Bivariate mode: extract both angle slices
+            theta1_snaps = self._current_snapshots[:, 0, :]
+            theta2_snaps = self._current_snapshots[:, 1, :]
+            theta1 = interpolate_angle(theta1_snaps, self._time_index)
+            theta2 = interpolate_angle(theta2_snaps, self._time_index)
+            res = int(math.sqrt(theta1.shape[0]))
+            argb = bivariate_to_argb(
+                theta1, theta2, self._torus_colormap_fn, res,
+            )
+        else:
+            # Univariate mode: single angle via 1D LUT
+            angle_snapshots = self._current_snapshots[:, self._angle_index, :]
+            angles = interpolate_angle(angle_snapshots, self._time_index)
+            res = int(math.sqrt(angles.shape[0]))
+            argb = angle_to_argb(angles, self._lut, res)
 
-        argb = angle_to_argb(angles, self._lut, res)
         self._current_image = numpy_to_qimage(argb)
         self.update()
 
@@ -679,6 +714,78 @@ class FractalCanvas(QWidget):
 
         painter.restore()
 
+    def _draw_torus_legend(self, painter: QPainter) -> None:
+        """Draw a 2D square legend in the bottom-right corner (bivariate mode)."""
+        img_x, img_y, side = self._image_rect()
+
+        # Build or reuse cached legend image
+        if self._cached_torus_legend_name != self._torus_colormap_name:
+            legend_data = build_torus_legend(self._torus_colormap_fn, 64)
+            self._cached_torus_legend_image = numpy_to_qimage(legend_data)
+            self._cached_torus_legend_name = self._torus_colormap_name
+
+        legend_size = 64
+        padding = 8
+
+        # Position: bottom-right of image area
+        lx = int(img_x + side - legend_size - padding)
+        ly = int(img_y + side - legend_size - padding)
+
+        painter.save()
+
+        # Draw the legend square
+        painter.drawImage(lx, ly, self._cached_torus_legend_image)
+
+        # Border
+        painter.setPen(QColor(200, 200, 210))
+        painter.drawRect(lx, ly, legend_size, legend_size)
+
+        # Axis labels
+        font = QFont("Helvetica", 10)
+        painter.setFont(font)
+        fm = QFontMetrics(font)
+
+        # theta1 label (below, centered)
+        painter.setPen(QColor(160, 160, 170))
+        t1_label = "\u03b8\u2081"
+        tw = fm.horizontalAdvance(t1_label)
+        painter.drawText(
+            int(lx + legend_size / 2 - tw / 2),
+            ly + legend_size + fm.ascent() + 2,
+            t1_label,
+        )
+
+        # theta2 label (left, centered, rotated)
+        t2_label = "\u03b8\u2082"
+        painter.save()
+        painter.translate(lx - fm.ascent() - 2, ly + legend_size / 2)
+        painter.rotate(-90)
+        tw2 = fm.horizontalAdvance(t2_label)
+        painter.drawText(int(-tw2 / 2), 0, t2_label)
+        painter.restore()
+
+        # Corner labels: "0" and "2pi"
+        painter.setPen(QColor(130, 130, 140))
+        small_font = QFont("Helvetica", 8)
+        painter.setFont(small_font)
+        sfm = QFontMetrics(small_font)
+
+        # Bottom-left: "0", bottom-right: "2pi" (theta1 axis)
+        painter.drawText(lx, ly + legend_size + sfm.ascent(), "0")
+        tw_2pi = sfm.horizontalAdvance("2\u03c0")
+        painter.drawText(
+            int(lx + legend_size - tw_2pi),
+            ly + legend_size + sfm.ascent(),
+            "2\u03c0",
+        )
+
+        # Top-left: "0", bottom-left: "2pi" (theta2 axis, vertical)
+        tw_zero = sfm.horizontalAdvance("0")
+        painter.drawText(lx - tw_zero - 2, ly + sfm.ascent(), "0")
+        painter.drawText(lx - tw_2pi - 2, ly + legend_size, "2\u03c0")
+
+        painter.restore()
+
     # -- Paint --
 
     def paintEvent(self, event):
@@ -730,8 +837,11 @@ class FractalCanvas(QWidget):
         # Axes, labels, and reference lines
         self._draw_axes(painter)
 
-        # Color wheel legend
-        self._draw_legend(painter)
+        # Legend: 2D torus grid or 1D donut wheel
+        if self._angle_index == 2:
+            self._draw_torus_legend(painter)
+        else:
+            self._draw_legend(painter)
 
         # Draw selection rectangle (while dragging)
         if self._selecting and self._select_rect is not None:

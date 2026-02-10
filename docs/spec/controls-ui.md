@@ -1,9 +1,10 @@
 # Controls UI
 
-Controls panel for fractal mode. File: `fractal/controls.py` (~368 lines).
+Controls panel for fractal mode. File: `fractal/controls.py` (~419 lines).
 
 > Cross-ref: [data-shapes.md](data-shapes.md) for signal payloads.
 > Cross-ref: [inspect-tool.md](inspect-tool.md) for the inspect panel.
+> Cross-ref: [coloring-pipeline.md](coloring-pipeline.md) for colormap registries.
 
 ## FractalControls(QWidget)
 
@@ -34,14 +35,29 @@ Emits `time_index_changed(float)`.
 
 ### Colormap
 
-Dropdown for colormap selection (HSV, twilight, viridis, magma, etc.).
-Emits `colormap_changed(str)`.
+Dropdown for colormap selection. Contents change dynamically based on angle mode:
+- **Univariate** (theta1 or theta2): shows `COLORMAPS` entries (HSV, Twilight)
+- **Bivariate** (both): shows `TORUS_COLORMAPS` entries (9 torus colormaps)
+
+The `_update_colormap_options()` method swaps dropdown items when the angle
+selection changes, using the `_building` guard to prevent spurious signal
+emissions during the swap.
+
+Emits `colormap_changed(str)` in univariate mode,
+`torus_colormap_changed(str)` in bivariate mode.
 
 ### Display Angle
 
-Dropdown to select which angle is colored in the fractal: "θ₂ (bob 2)"
-(default) or "θ₁ (bob 1)". Display-only — no recomputation needed.
-Emits `angle_selection_changed(int)` with 0 (theta1) or 1 (theta2).
+Dropdown to select which angle is colored in the fractal:
+- "θ₂ (bob 2)" (data=1)
+- "θ₁ (bob 1)" (data=0)
+- "Both (θ₁, θ₂)" (default, data=2) — enables bivariate torus colormaps
+
+Default is "Both" with the "RGB Aligned + YBGM" torus colormap pre-selected.
+The colormap combo is initially populated with torus colormaps to match.
+
+Display-only — no recomputation needed, only recoloring.
+Emits `angle_selection_changed(int)` with 0, 1, or 2.
 
 ### Resolution
 
@@ -69,11 +85,25 @@ Contains two `PendulumDiagram` widgets side by side:
 
 Angle readout labels below each diagram: "θ₁ = X.XX, θ₂ = X.XX".
 
+## Signals
+
+| Signal | Payload | When emitted |
+|--------|---------|--------------|
+| `time_index_changed` | `float` | Time slider moved |
+| `colormap_changed` | `str` | Colormap dropdown changed (univariate mode) |
+| `torus_colormap_changed` | `str` | Colormap dropdown changed (bivariate mode) |
+| `resolution_changed` | `int` | Resolution dropdown changed |
+| `physics_changed` | (none) | Any physics slider moved |
+| `t_end_changed` | (none) | Duration slider moved |
+| `zoom_out_clicked` | (none) | Zoom out button clicked |
+| `tool_mode_changed` | `str` | Tool button toggled ("zoom", "pan", "inspect") |
+| `angle_selection_changed` | `int` | Angle dropdown changed (0, 1, or 2) |
+
 ## Key Methods
 
 - `get_params() -> DoublePendulumParams` — read physics sliders
 - `set_params(params)` — update physics sliders
-- `get_angle_index() -> int` — selected angle (0=theta1, 1=theta2)
+- `get_angle_index() -> int` — selected angle (0=theta1, 1=theta2, 2=both)
 - `get_time_index() -> float` — current slider position as sample index
 - `get_t_end() -> float` — simulation duration
 - `update_time_label(t_end)` — refresh "t = X.X s" display

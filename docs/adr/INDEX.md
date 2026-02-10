@@ -17,6 +17,7 @@ edited after creation; if a decision is revisited, a new ADR supersedes the old.
 | [0007](0007-dual-angle-snapshots.md) | Dual-angle snapshot storage (theta1 + theta2) | Accepted | 2025-06 |
 | [0008](0008-tool-mode-architecture.md) | Three-mode tool architecture (zoom/pan/inspect) | Accepted | 2025-06 |
 | [0009](0009-adr-living-spec-docs.md) | ADR + Living Spec documentation structure | Accepted | 2025-06 |
+| [0010](0010-bivariate-torus-colormaps.md) | Bivariate torus colormaps for dual-angle display | Accepted | 2025-06 |
 
 ## How to Write an ADR
 

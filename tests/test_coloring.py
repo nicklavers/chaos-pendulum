@@ -186,3 +186,33 @@ class TestAngleIndexColoring:
             sliced = snapshots[:, idx, :]
             expected_val = 0.5 if idx == 0 else 2.5
             np.testing.assert_allclose(sliced, expected_val)
+
+
+class TestBivariateAngleSlicing:
+    """Test that both angle slices can be extracted for bivariate mode."""
+
+    def test_both_slices_extractable(self):
+        n = 4
+        n_samples = 10
+        snapshots = np.zeros((n, 2, n_samples), dtype=np.float32)
+        snapshots[:, 0, :] = 0.5   # theta1
+        snapshots[:, 1, :] = 2.5   # theta2
+
+        theta1 = interpolate_angle(snapshots[:, 0, :], 0.0)
+        theta2 = interpolate_angle(snapshots[:, 1, :], 0.0)
+
+        np.testing.assert_allclose(theta1, 0.5)
+        np.testing.assert_allclose(theta2, 2.5)
+
+    def test_both_slices_interpolated(self):
+        """Both slices should interpolate correctly at fractional time."""
+        n = 2
+        snapshots = np.zeros((n, 2, 3), dtype=np.float32)
+        snapshots[:, 0, :] = [[0.0, 1.0, 2.0], [0.0, 1.0, 2.0]]
+        snapshots[:, 1, :] = [[3.0, 4.0, 5.0], [3.0, 4.0, 5.0]]
+
+        theta1 = interpolate_angle(snapshots[:, 0, :], 0.5)
+        theta2 = interpolate_angle(snapshots[:, 1, :], 0.5)
+
+        np.testing.assert_allclose(theta1, 0.5, atol=1e-5)
+        np.testing.assert_allclose(theta2, 3.5, atol=1e-5)

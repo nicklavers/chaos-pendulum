@@ -14,6 +14,7 @@ from PyQt6.QtWidgets import (
 
 from fractal.compute import DEFAULT_N_SAMPLES
 from fractal.coloring import COLORMAPS
+from fractal.bivariate import TORUS_COLORMAPS
 from fractal.pendulum_diagram import PendulumDiagram
 from ui_common import PhysicsParamsWidget
 
@@ -29,7 +30,8 @@ class FractalControls(QWidget):
     t_end_changed = pyqtSignal()
     zoom_out_clicked = pyqtSignal()
     tool_mode_changed = pyqtSignal(str)  # "zoom", "pan", or "inspect"
-    angle_selection_changed = pyqtSignal(int)  # 0 = theta1, 1 = theta2
+    angle_selection_changed = pyqtSignal(int)  # 0 = theta1, 1 = theta2, 2 = both
+    torus_colormap_changed = pyqtSignal(str)
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -169,14 +171,20 @@ class FractalControls(QWidget):
 
         display_layout.addWidget(QLabel("Colormap:"), 0, 0)
         self.colormap_combo = QComboBox()
-        for name in COLORMAPS:
+        # Initially populated with torus colormaps (matching default "Both" angle)
+        for name in TORUS_COLORMAPS:
             self.colormap_combo.addItem(name)
+        ybgm_idx = self.colormap_combo.findText("RGB Aligned + YBGM")
+        if ybgm_idx >= 0:
+            self.colormap_combo.setCurrentIndex(ybgm_idx)
         display_layout.addWidget(self.colormap_combo, 0, 1)
 
         display_layout.addWidget(QLabel("Display angle:"), 1, 0)
         self.angle_combo = QComboBox()
         self.angle_combo.addItem("\u03b8\u2082 (bob 2)", 1)
         self.angle_combo.addItem("\u03b8\u2081 (bob 1)", 0)
+        self.angle_combo.addItem("Both (\u03b8\u2081, \u03b8\u2082)", 2)
+        self.angle_combo.setCurrentIndex(2)  # default: Both
         display_layout.addWidget(self.angle_combo, 1, 1)
 
         display_layout.addWidget(QLabel("Resolution:"), 2, 0)
@@ -261,7 +269,7 @@ class FractalControls(QWidget):
         return float(self.t_end_slider.value())
 
     def get_angle_index(self) -> int:
-        """Return the currently selected angle index (0=theta1, 1=theta2)."""
+        """Return the currently selected angle index (0=theta1, 1=theta2, 2=both)."""
         return self.angle_combo.currentData()
 
     def get_resolution(self) -> int:
@@ -323,12 +331,39 @@ class FractalControls(QWidget):
             self._anim_timer.stop()
 
     def _on_colormap_changed(self, name):
-        if not self._building:
+        if self._building:
+            return
+        if self.angle_combo.currentData() == 2:
+            self.torus_colormap_changed.emit(name)
+        else:
             self.colormap_changed.emit(name)
 
     def _on_angle_changed(self, _index):
-        if not self._building:
-            self.angle_selection_changed.emit(self.angle_combo.currentData())
+        if self._building:
+            return
+        angle_index = self.angle_combo.currentData()
+        self.angle_selection_changed.emit(angle_index)
+        self._update_colormap_options(angle_index)
+
+    def _update_colormap_options(self, angle_index: int) -> None:
+        """Swap colormap combo contents based on univariate vs bivariate mode."""
+        self._building = True
+        current_text = self.colormap_combo.currentText()
+        self.colormap_combo.clear()
+
+        if angle_index == 2:
+            for name in TORUS_COLORMAPS:
+                self.colormap_combo.addItem(name)
+        else:
+            for name in COLORMAPS:
+                self.colormap_combo.addItem(name)
+
+        # Try to restore previous selection
+        idx = self.colormap_combo.findText(current_text)
+        if idx >= 0:
+            self.colormap_combo.setCurrentIndex(idx)
+
+        self._building = False
 
     def _on_resolution_changed(self, _index):
         if not self._building:

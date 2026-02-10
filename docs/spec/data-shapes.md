@@ -88,14 +88,22 @@ Input to compute backends.
 - omega1 = omega2 = 0 for the standard fractal grid
 - Built by `build_initial_conditions(viewport)` in `fractal/compute.py`
 
-### ARGB Pixel Array — `(resolution, resolution, 4)` uint8
+### BGRA Pixel Array — `(resolution, resolution, 4)` uint8
 
-Output of `theta2_to_argb()`. Channel order: ARGB32 (Qt's native format).
+Output of `angle_to_argb()` (univariate) or `bivariate_to_argb()` (bivariate).
+Channel order in memory: BGRA (B=index 0, G=1, R=2, A=3). This is Qt's
+ARGB32 format on little-endian systems. The alpha channel is always 255.
 
-### HSV LUT — `(4096,)` uint32
+### HSV LUT — `(4096, 4)` uint8
 
-Pre-computed hue-to-ARGB32 lookup table. 16 KB, fits in L1 cache.
-Rebuilt on colormap change (~1ms).
+Pre-computed hue-to-BGRA lookup table. 16 KB, fits in L1 cache.
+Rebuilt on colormap change (~1ms). Used only in the univariate path.
+
+### Torus Colormap Registry
+
+`TORUS_COLORMAPS: dict[str, Callable]` in `fractal/bivariate.py`. Maps names
+to functions with signature `(theta1: ndarray, theta2: ndarray) -> (N, 4) uint8`.
+9 entries. Used only in the bivariate path.
 
 ## Signal Payloads
 
@@ -107,11 +115,13 @@ Rebuilt on colormap change (~1ms).
 | `ic_selected` | `FractalCanvas` | `(float, float)` — theta1, theta2 (Ctrl+click) |
 | `hover_updated` | `FractalCanvas` | `(float, float)` — theta1, theta2 (inspect mode) |
 | `time_index_changed` | `FractalControls` | `float` — slider position [0, n_samples-1] |
-| `colormap_changed` | `FractalControls` | `str` — colormap name |
+| `colormap_changed` | `FractalControls` | `str` — colormap name (univariate mode) |
+| `torus_colormap_changed` | `FractalControls` | `str` — torus colormap name (bivariate mode) |
 | `resolution_changed` | `FractalControls` | `int` — new resolution |
 | `physics_changed` | `FractalControls` | (no payload) |
 | `t_end_changed` | `FractalControls` | (no payload) |
 | `tool_mode_changed` | `FractalControls` | `str` — "zoom", "pan", or "inspect" |
+| `angle_selection_changed` | `FractalControls` | `int` — 0 (theta1), 1 (theta2), or 2 (both) |
 | `zoom_out_clicked` | `FractalControls` | (no payload) |
 
 ## Constants

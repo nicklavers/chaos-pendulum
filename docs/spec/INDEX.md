@@ -13,7 +13,7 @@ the **current state** of a subsystem — no history, no rationale (see
 | [simulation.md](simulation.md) | Physics engine (`simulation.py`) | `DoublePendulumParams`, `derivatives()`, `positions()` |
 | [fractal-compute.md](fractal-compute.md) | Compute backends and progressive rendering | `ComputeBackend` Protocol, NumPy / Numba / JAX backends |
 | [fractal-caching.md](fractal-caching.md) | Cache architecture and eviction | `FractalCache`, `CacheKey`, LRU budget |
-| [coloring-pipeline.md](coloring-pipeline.md) | Color mapping from angles to pixels | HSV LUT, `theta2_to_argb()`, `numpy_to_qimage()` |
+| [coloring-pipeline.md](coloring-pipeline.md) | Color mapping from angles to pixels | Univariate (1D LUT), bivariate (torus colormaps), `TORUS_COLORMAPS` |
 | [canvas-rendering.md](canvas-rendering.md) | Canvas drawing: axes, legend, ghost rect, tool modes | `FractalCanvas`, coordinate mapping, overlays |
 | [controls-ui.md](controls-ui.md) | Controls panel layout and signals | `FractalControls`, time slider, physics params |
 | [inspect-tool.md](inspect-tool.md) | Inspect tool data flow and pendulum diagrams | `PendulumDiagram`, hover → lookup → display |
@@ -28,6 +28,7 @@ Match your task to the minimum set of docs:
 | **Fix a bug in one file** | [file-map.md](file-map.md) → find the file | The spec for that subsystem |
 | **Add a new compute backend** | [data-shapes.md](data-shapes.md), [fractal-compute.md](fractal-compute.md) | [workers.md](workers.md) |
 | **Change the color mapping** | [data-shapes.md](data-shapes.md), [coloring-pipeline.md](coloring-pipeline.md) | [canvas-rendering.md](canvas-rendering.md) |
+| **Add a torus colormap** | [coloring-pipeline.md](coloring-pipeline.md) (bivariate section) | [controls-ui.md](controls-ui.md), [canvas-rendering.md](canvas-rendering.md) |
 | **Add a new UI control** | [controls-ui.md](controls-ui.md) | [canvas-rendering.md](canvas-rendering.md) if it affects the canvas |
 | **Add a new tool mode** | [canvas-rendering.md](canvas-rendering.md), [inspect-tool.md](inspect-tool.md) (for pattern) | [controls-ui.md](controls-ui.md) |
 | **Change cache behavior** | [fractal-caching.md](fractal-caching.md), [data-shapes.md](data-shapes.md) | — |

@@ -22,33 +22,38 @@ chaos-pendulum/
 
     fractal/
         __init__.py                   1 line
-        canvas.py                   887 lines   FractalCanvas: QImage, pan/zoom, axes, legend, tools
-        controls.py                 368 lines   Time slider, colormap, resolution, inspect panel
-        view.py                     348 lines   FractalView: orchestration, signal wiring
+        canvas.py                  1006 lines   FractalCanvas: QImage, pan/zoom, axes, legend, tools
+        controls.py                 419 lines   Time slider, colormap, resolution, inspect panel
+        view.py                     358 lines   FractalView: orchestration, signal wiring
         pendulum_diagram.py         133 lines   PendulumDiagram: stick-figure widget
         worker.py                    96 lines   FractalWorker QThread
         compute.py                  137 lines   ComputeBackend Protocol + grid builder
         _numpy_backend.py           169 lines   Vectorized NumPy RK4
         _numba_backend.py           170 lines   @njit parallel RK4 (optional dep)
         cache.py                    176 lines   FractalCache, CacheKey, LRU
-        coloring.py                 170 lines   HSV LUT, theta2_to_argb, QImage builder
+        coloring.py                 170 lines   HSV LUT, angle_to_argb, QImage builder (univariate)
+        bivariate.py                577 lines   Torus colormaps, bivariate_to_argb, legend builder
 
     tests/
         test_simulation.py
         test_numpy_backend.py
-        test_coloring.py
+        test_coloring.py                       Univariate coloring + angle slicing tests
+        test_bivariate.py                      Torus colormaps: landmarks, periodicity, performance
         test_cache.py
         test_fractal_view.py                   pytest-qt integration tests
 ```
 
-**Total**: ~3,250 lines across ~20 modules.
+**Total**: ~4,100 lines across ~22 modules.
 
 ## Notes
 
-- `fractal/canvas.py` (887 lines) exceeds the 400-line guideline. Accumulated
-  features: axes, legend, ghost rect, 3 tool modes, coordinate mapping. Consider
-  extracting `_draw_axes` and `_draw_legend` into `fractal/overlays.py` if it
-  grows further.
+- `fractal/canvas.py` (1006 lines) exceeds the 400-line guideline. Accumulated
+  features: axes, donut legend, torus legend, ghost rect, 3 tool modes,
+  coordinate mapping, bivariate display path. Consider extracting overlay
+  drawing into `fractal/overlays.py` if it grows further.
+- `fractal/bivariate.py` (577 lines) exceeds the 400-line guideline due to 9
+  colormap functions plus helper utilities. Each function is self-contained;
+  splitting would fragment related math.
 - Physics equations are duplicated between `simulation.py` (scalar) and
   `fractal/_numpy_backend.py` (vectorized batch). Cross-validation test ensures
   they stay in sync. See [ADR-0001](../adr/0001-vectorized-rk4.md).
@@ -66,7 +71,10 @@ main.py --> app_window.py
               |
               --> fractal/view.py
                     --> fractal/canvas.py     --> fractal/coloring.py
+                    |                         --> fractal/bivariate.py
                     --> fractal/controls.py   --> ui_common.py
+                    |     --> fractal/coloring.py  (COLORMAPS registry)
+                    |     --> fractal/bivariate.py (TORUS_COLORMAPS registry)
                     |     --> fractal/pendulum_diagram.py --> simulation.py
                     --> fractal/worker.py     --> fractal/compute.py
                     |                              --> fractal/_numpy_backend.py

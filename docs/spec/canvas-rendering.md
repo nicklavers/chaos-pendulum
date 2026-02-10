@@ -1,7 +1,7 @@
 # Canvas Rendering
 
 Drawing pipeline for the fractal canvas: image display, axes, legend, ghost
-rectangle, and tool modes. File: `fractal/canvas.py` (~887 lines).
+rectangle, and tool modes. File: `fractal/canvas.py` (~1006 lines).
 
 > Cross-ref: [data-shapes.md](data-shapes.md) for `FractalViewport` and signals.
 > Cross-ref: [coloring-pipeline.md](coloring-pipeline.md) for pixel array generation.
@@ -23,10 +23,20 @@ the current time-slice as a QImage, and draws overlays (axes, legend, ghost rect
 
 `display(snapshots, time_index)`:
 1. Stores `_current_snapshots`
-2. Calls `_rebuild_image()` which passes `snapshots[:, 1, :]` (theta2 slice)
-   through the coloring pipeline
+2. Calls `_rebuild_image()` which takes one of two paths:
+   - **Univariate** (`_angle_index` 0 or 1): passes `snapshots[:, angle_index, :]`
+     through `interpolate_angle()` then `angle_to_argb()` (1D LUT)
+   - **Bivariate** (`_angle_index == 2`): interpolates both angle slices, calls
+     `bivariate_to_argb()` with the active torus colormap function
 3. Result: `QImage` rendered via `QPainter.drawImage()` with nearest-neighbor
    transform
+
+`set_angle_index(index)`: Accepts 0 (theta1), 1 (theta2), or 2 (both).
+Triggers `_rebuild_image()`.
+
+`set_torus_colormap(name)`: Switches the active torus colormap from
+`TORUS_COLORMAPS` and invalidates the cached legend. Only rebuilds image
+if currently in bivariate mode.
 
 ### Axes and Labels
 
@@ -35,19 +45,35 @@ the current time-slice as a QImage, and draws overlays (axes, legend, ghost rect
 - Dashed reference lines at θ=π through the image area
 - Axis titles "θ₁" (horizontal) and "θ₂" (vertical, rotated)
 
-### Color Wheel Legend
+### Legends
 
-Donut-shaped legend in the bottom-right corner showing theta2-to-color mapping.
+Two legend styles, selected by angle mode:
+
+#### Color Wheel Legend (univariate)
+
+Donut-shaped legend in the bottom-right corner showing single-angle-to-color
+mapping. Drawn by `_draw_legend()`.
 
 - 72 pie segments using active LUT colors
 - `LEGEND_OUTER_RADIUS = 36`, `LEGEND_INNER_RADIUS = 22`
 - Tick marks and labels at 0, π/2, π, 3π/2
-- "θ₂" label centered in the donut
+- "θ₂" (or "θ₁") label centered in the donut
 
 **Angle convention**: θ=0 at 6 o'clock (bottom, pendulum hanging down), angles
 increase clockwise. Qt angles go counter-clockwise from 3 o'clock, so:
 - Pie segments: `start_deg = -90.0 + i * span_angle`
 - Tick marks: `screen_rad = π/2 - angle_rad`
+
+#### Torus Legend (bivariate)
+
+64x64 pixel square legend in the bottom-right corner showing the 2D torus
+colormap. Drawn by `_draw_torus_legend()`.
+
+- Built via `build_torus_legend(colormap_fn, 64)` from `fractal/bivariate.py`
+- Cached as `_cached_torus_legend_image`; invalidated on torus colormap change
+- Axis labels: "θ₁" below (horizontal), "θ₂" left (vertical, rotated)
+- Corner labels: "0" and "2π" on both axes
+- Light border around the square
 
 ### Ghost Rectangle (Zoom-Out Feedback)
 
