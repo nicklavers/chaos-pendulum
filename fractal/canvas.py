@@ -9,6 +9,7 @@ previous viewport region.
 from __future__ import annotations
 
 import math
+import uuid
 
 import numpy as np
 from PyQt6.QtCore import Qt, QTimer, QRectF, pyqtSignal
@@ -131,6 +132,7 @@ class FractalCanvas(QWidget):
     viewport_changed = pyqtSignal(FractalViewport)
     ic_selected = pyqtSignal(float, float)  # theta1, theta2 (Ctrl+click)
     hover_updated = pyqtSignal(float, float)  # theta1, theta2 (inspect mode)
+    trajectory_pinned = pyqtSignal(str, float, float)  # row_id, theta1, theta2
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -202,6 +204,9 @@ class FractalCanvas(QWidget):
         # Hover coordinate tracking
         self._hover_theta1 = None
         self._hover_theta2 = None
+
+        # Pinned trajectory markers: row_id -> (theta1, theta2) physics coords
+        self._pinned_markers: dict[str, tuple[float, float]] = {}
 
     # -- Public interface --
 
@@ -367,6 +372,24 @@ class FractalCanvas(QWidget):
     @property
     def hover_theta2(self) -> float | None:
         return self._hover_theta2
+
+    # -- Pinned marker management --
+
+    def add_marker(self, row_id: str, theta1: float, theta2: float) -> None:
+        """Add or update a pinned trajectory marker on the canvas."""
+        self._pinned_markers = {**self._pinned_markers, row_id: (theta1, theta2)}
+        self.update()
+
+    def remove_marker(self, row_id: str) -> None:
+        """Remove a pinned trajectory marker by row_id."""
+        new_markers = {k: v for k, v in self._pinned_markers.items() if k != row_id}
+        self._pinned_markers = new_markers
+        self.update()
+
+    def clear_markers(self) -> None:
+        """Remove all pinned trajectory markers."""
+        self._pinned_markers = {}
+        self.update()
 
     # -- Image rendering --
 
@@ -1000,6 +1023,27 @@ class FractalCanvas(QWidget):
             painter.setBrush(QColor(200, 200, 200, alpha // 3))
             painter.drawRect(self._ghost_rect)
 
+        # Draw pinned trajectory markers (white X at each location)
+        if self._pinned_markers:
+            marker_pen = QPen(QColor(255, 255, 255, 220))
+            marker_pen.setWidth(2)
+            painter.setPen(marker_pen)
+            marker_size = 5  # half-size of the X
+
+            for theta1, theta2 in self._pinned_markers.values():
+                px, py = self._physics_to_pixel(theta1, theta2)
+                # Clip to image area
+                if (img_x <= px <= img_x + side
+                        and img_y <= py <= img_y + side):
+                    painter.drawLine(
+                        int(px - marker_size), int(py - marker_size),
+                        int(px + marker_size), int(py + marker_size),
+                    )
+                    painter.drawLine(
+                        int(px + marker_size), int(py - marker_size),
+                        int(px - marker_size), int(py + marker_size),
+                    )
+
         painter.end()
 
     # -- Mouse events --
@@ -1011,6 +1055,18 @@ class FractalCanvas(QWidget):
                 pos = event.position()
                 theta1, theta2 = self._pixel_to_physics(pos.x(), pos.y())
                 self.ic_selected.emit(theta1, theta2)
+                return
+
+            if self._tool_mode == TOOL_INSPECT:
+                # Click in inspect mode: pin trajectory at this point
+                pos = event.position()
+                img_x, img_y, side = self._image_rect()
+                if (img_x <= pos.x() <= img_x + side
+                        and img_y <= pos.y() <= img_y + side):
+                    theta1, theta2 = self._pixel_to_physics(pos.x(), pos.y())
+                    row_id = str(uuid.uuid4())[:8]
+                    self.add_marker(row_id, theta1, theta2)
+                    self.trajectory_pinned.emit(row_id, theta1, theta2)
                 return
 
             if self._tool_mode == TOOL_ZOOM:

@@ -87,6 +87,22 @@ class ComputeBackend(Protocol):
         """
         ...
 
+    def simulate_basin_batch(
+        self,
+        params: DoublePendulumParams,
+        initial_conditions: np.ndarray,  # (N, 4)
+        t_end: float,
+        dt: float,
+        cancel_check: callable | None = None,
+        progress_callback: callable | None = None,
+        saddle_energy_val: float | None = None,
+    ) -> BasinResult:
+        """Simulate N trajectories and return only the final state.
+
+        Optimised for basin mode: no intermediate snapshots stored.
+        """
+        ...
+
 
 def build_initial_conditions(viewport: FractalViewport) -> np.ndarray:
     """Generate (N, 4) array of ICs from viewport. omega1=omega2=0.

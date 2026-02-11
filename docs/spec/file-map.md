@@ -24,8 +24,12 @@ chaos-pendulum/
         __init__.py                   1 line
         canvas.py                  1138 lines   FractalCanvas: QImage, pan/zoom, axes, legend, tools
         controls.py                 512 lines   Time slider, colormap, resolution, basin mode, inspect
-        view.py                     404 lines   FractalView: orchestration, signal wiring
+        view.py                     528 lines   FractalView: orchestration, signal wiring
+        inspect_column.py           609 lines   InspectColumn: hover + stacked animation + scrub
+        animated_diagram.py         373 lines   MultiTrajectoryDiagram: ghost IC + basin-colored bobs
+        trajectory_indicator.py     220 lines   TrajectoryIndicator: clickable circle with winding numbers
         pendulum_diagram.py         133 lines   PendulumDiagram: stick-figure widget
+        winding_circle.py           139 lines   WindingCircle: colored circle for basin hover
         worker.py                   118 lines   FractalWorker QThread (dispatches to RK4 or DOP853)
         compute.py                  183 lines   ComputeBackend Protocol, BatchResult, BasinResult, saddle_energy
         basin_solver.py             126 lines   DOP853 adaptive solver for basin mode (final state only)
@@ -47,9 +51,11 @@ chaos-pendulum/
         test_damping.py                        Friction: derivatives, energy decay, convergence
         test_winding.py                        Winding number extraction + colormaps
         test_energy_termination.py             Freeze behavior, speedup, winding stability
+        test_inspect_utils.py                  rk4_single_trajectory + get_single_winding_color
+        test_multi_trajectory.py               TrajectoryInfo, PinnedTrajectory, color lookup, constants
 ```
 
-**Total**: ~4,900 lines across ~24 modules.
+**Total**: ~5,800 lines across ~30 modules.
 
 ## Notes
 
@@ -84,6 +90,12 @@ main.py --> app_window.py
                     |     --> fractal/bivariate.py (TORUS_COLORMAPS registry)
                     |     --> fractal/winding.py   (WINDING_COLORMAPS registry)
                     |     --> fractal/pendulum_diagram.py --> simulation.py
+                    --> fractal/inspect_column.py
+                    |     --> fractal/animated_diagram.py --> simulation.py
+                    |     --> fractal/trajectory_indicator.py
+                    |     --> fractal/pendulum_diagram.py
+                    |     --> fractal/winding_circle.py
+                    |     --> fractal/winding.py
                     --> fractal/worker.py     --> fractal/compute.py
                     |                         --> fractal/basin_solver.py --> simulation.py
                     |                              --> fractal/_numpy_backend.py

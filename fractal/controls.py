@@ -3,8 +3,6 @@
 All controls for the fractal explorer mode, organized in grouped sections.
 """
 
-import math
-
 from PyQt6.QtCore import Qt, QTimer, pyqtSignal
 from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QGridLayout,
@@ -16,7 +14,6 @@ from fractal.compute import DEFAULT_N_SAMPLES
 from fractal.coloring import COLORMAPS
 from fractal.bivariate import TORUS_COLORMAPS
 from fractal.winding import WINDING_COLORMAPS
-from fractal.pendulum_diagram import PendulumDiagram
 from ui_common import PhysicsParamsWidget, slider_value
 
 
@@ -121,52 +118,6 @@ class FractalControls(QWidget):
         nav_layout.addWidget(self.nav_hint)
 
         main_layout.addWidget(nav_group)
-
-        # --- Inspect Panel (hidden by default) ---
-        self.inspect_group = QGroupBox("Inspect")
-        inspect_layout = QVBoxLayout()
-        self.inspect_group.setLayout(inspect_layout)
-
-        diagrams_layout = QHBoxLayout()
-
-        # Left: initial state diagram
-        initial_col = QVBoxLayout()
-        self._initial_diagram = PendulumDiagram()
-        self._initial_diagram.set_label("Initial (t=0)")
-        initial_col.addWidget(self._initial_diagram)
-        self._initial_angles_label = QLabel(
-            "\u03b8\u2081=\u2014, \u03b8\u2082=\u2014"
-        )
-        self._initial_angles_label.setStyleSheet(
-            "color: #aaa; font-size: 11px;"
-        )
-        self._initial_angles_label.setAlignment(
-            Qt.AlignmentFlag.AlignCenter
-        )
-        initial_col.addWidget(self._initial_angles_label)
-
-        # Right: state at time t diagram
-        at_t_col = QVBoxLayout()
-        self._at_t_diagram = PendulumDiagram()
-        self._at_t_diagram.set_label("At t = 0.0 s")
-        at_t_col.addWidget(self._at_t_diagram)
-        self._at_t_angles_label = QLabel(
-            "\u03b8\u2081=\u2014, \u03b8\u2082=\u2014"
-        )
-        self._at_t_angles_label.setStyleSheet(
-            "color: #aaa; font-size: 11px;"
-        )
-        self._at_t_angles_label.setAlignment(
-            Qt.AlignmentFlag.AlignCenter
-        )
-        at_t_col.addWidget(self._at_t_angles_label)
-
-        diagrams_layout.addLayout(initial_col)
-        diagrams_layout.addLayout(at_t_col)
-        inspect_layout.addLayout(diagrams_layout)
-
-        self.inspect_group.setVisible(False)
-        main_layout.addWidget(self.inspect_group)
 
         # --- Display ---
         display_group = QGroupBox("Display")
@@ -317,33 +268,6 @@ class FractalControls(QWidget):
         text = self.speed_combo.currentText().replace("x", "")
         return float(text)
 
-    def update_inspect(
-        self,
-        theta1_init: float,
-        theta2_init: float,
-        theta1_at_t: float,
-        theta2_at_t: float,
-        t_value: float,
-    ) -> None:
-        """Update both inspect diagrams and angle labels."""
-        self._initial_diagram.set_state(theta1_init, theta2_init)
-        self._initial_angles_label.setText(
-            f"\u03b8\u2081={math.degrees(theta1_init):.1f}\u00b0, "
-            f"\u03b8\u2082={math.degrees(theta2_init):.1f}\u00b0"
-        )
-
-        self._at_t_diagram.set_state(theta1_at_t, theta2_at_t)
-        self._at_t_diagram.set_label(f"At t = {t_value:.1f} s")
-        self._at_t_angles_label.setText(
-            f"\u03b8\u2081={math.degrees(theta1_at_t):.1f}\u00b0, "
-            f"\u03b8\u2082={math.degrees(theta2_at_t):.1f}\u00b0"
-        )
-
-    def set_inspect_params(self, params) -> None:
-        """Update physics params on both inspect diagrams."""
-        self._initial_diagram.set_params(params)
-        self._at_t_diagram.set_params(params)
-
     def update_time_label(self, t_end: float) -> None:
         """Update the time label based on current slider position."""
         frac = self.time_slider.value() / max(1, self.time_slider.maximum())
@@ -427,15 +351,12 @@ class FractalControls(QWidget):
         if button is self.zoom_tool_btn:
             self.tool_mode_changed.emit("zoom")
             self.nav_hint.setText("Drag to zoom in")
-            self.inspect_group.setVisible(False)
         elif button is self.pan_tool_btn:
             self.tool_mode_changed.emit("pan")
             self.nav_hint.setText("Drag to pan")
-            self.inspect_group.setVisible(False)
         elif button is self.inspect_tool_btn:
             self.tool_mode_changed.emit("inspect")
-            self.nav_hint.setText("Hover to inspect")
-            self.inspect_group.setVisible(True)
+            self.nav_hint.setText("Hover to inspect, click to pin")
 
     def _on_zoom_out_clicked(self):
         self.zoom_out_clicked.emit()

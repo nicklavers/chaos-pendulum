@@ -1,7 +1,7 @@
 """Fractal worker: QThread for background compute with progressive levels.
 
-Runs vectorized RK4 (angle mode) or adaptive DOP853 (basin mode) in a
-background thread, emitting signals for each completed resolution level.
+Runs vectorized RK4 in a background thread for both angle and basin modes,
+emitting signals for each completed resolution level.
 """
 
 from __future__ import annotations
@@ -15,7 +15,6 @@ from fractal.compute import (
     FractalTask, FractalViewport, ComputeBackend,
     build_initial_conditions, saddle_energy,
 )
-from fractal.basin_solver import simulate_basin_batch
 
 logger = logging.getLogger(__name__)
 
@@ -82,10 +81,11 @@ class FractalWorker(QThread):
 
             try:
                 if task.basin:
-                    result = simulate_basin_batch(
+                    result = self._backend.simulate_basin_batch(
                         params=task.params,
                         initial_conditions=ics,
                         t_end=task.t_end,
+                        dt=task.dt,
                         cancel_check=self._cancel_check,
                         progress_callback=lambda done, total: self.progress.emit(done, total),
                         saddle_energy_val=saddle_val,

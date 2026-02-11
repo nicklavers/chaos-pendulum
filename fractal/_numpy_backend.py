@@ -15,7 +15,7 @@ from __future__ import annotations
 
 import numpy as np
 
-from fractal.compute import BatchResult
+from fractal.compute import BasinResult, BatchResult
 from simulation import DoublePendulumParams
 
 
@@ -52,6 +52,39 @@ class NumpyBackend:
         """
         return rk4_batch_with_snapshots(
             params, initial_conditions, t_end, dt, n_samples,
+            cancel_check, progress_callback, saddle_energy_val,
+        )
+
+    def simulate_basin_batch(
+        self,
+        params: DoublePendulumParams,
+        initial_conditions: np.ndarray,
+        t_end: float,
+        dt: float,
+        cancel_check: callable | None = None,
+        progress_callback: callable | None = None,
+        saddle_energy_val: float | None = None,
+    ) -> BasinResult:
+        """Simulate N trajectories, return only the final state.
+
+        Optimised for basin mode: no intermediate snapshots are stored,
+        reducing memory and avoiding snapshot bookkeeping overhead.
+
+        Args:
+            params: Physics parameters.
+            initial_conditions: (N, 4) array [theta1, theta2, omega1, omega2].
+            t_end: Simulation end time in seconds.
+            dt: RK4 step size.
+            cancel_check: Optional callable returning True to abort.
+            progress_callback: Optional callable(steps_done, total_steps).
+            saddle_energy_val: If provided, freeze trajectories whose total
+                energy drops below this value (basin mode early termination).
+
+        Returns:
+            BasinResult with final_state (N, 4) float32.
+        """
+        return rk4_basin_final_state(
+            params, initial_conditions, t_end, dt,
             cancel_check, progress_callback, saddle_energy_val,
         )
 
@@ -139,6 +172,49 @@ def total_energy_batch(
     )
     potential = -(m1 + m2) * g * l1 * np.cos(theta1) - m2 * g * l2 * np.cos(theta2)
     return kinetic + potential
+
+
+def rk4_single_trajectory(
+    params: DoublePendulumParams,
+    theta1: float,
+    theta2: float,
+    t_end: float,
+    dt: float,
+) -> np.ndarray:
+    """Run RK4 for a single trajectory, returning every timestep.
+
+    Used for on-demand trajectory visualization (inspect tool). No snapshot
+    sampling, no freeze logic — just raw integration returning the full
+    state at every step.
+
+    Args:
+        params: Physics parameters.
+        theta1: Initial angle 1 (radians).
+        theta2: Initial angle 2 (radians).
+        t_end: Simulation end time.
+        dt: Step size.
+
+    Returns:
+        (n_steps + 1, 4) float32 array [theta1, theta2, omega1, omega2].
+        Row 0 is the initial state.
+    """
+    n_steps = int(t_end / dt)
+    # Single trajectory as (1, 4) to reuse derivatives_batch
+    states = np.array([[theta1, theta2, 0.0, 0.0]], dtype=np.float64)
+
+    trajectory = np.empty((n_steps + 1, 4), dtype=np.float32)
+    trajectory[0] = states[0].astype(np.float32)
+
+    for step in range(n_steps):
+        k1 = derivatives_batch(states, params)
+        k2 = derivatives_batch(states + 0.5 * dt * k1, params)
+        k3 = derivatives_batch(states + 0.5 * dt * k2, params)
+        k4 = derivatives_batch(states + dt * k3, params)
+
+        states = states + (dt / 6.0) * (k1 + 2 * k2 + 2 * k3 + k4)
+        trajectory[step + 1] = states[0].astype(np.float32)
+
+    return trajectory
 
 
 def rk4_batch_with_snapshots(
@@ -251,3 +327,85 @@ def rk4_batch_with_snapshots(
         progress_callback(n_steps, n_steps)
 
     return BatchResult(snapshots, final_velocities)
+
+
+def rk4_basin_final_state(
+    params: DoublePendulumParams,
+    initial_conditions: np.ndarray,
+    t_end: float,
+    dt: float,
+    cancel_check: callable | None = None,
+    progress_callback: callable | None = None,
+    saddle_energy_val: float | None = None,
+) -> BasinResult:
+    """Run vectorized RK4 and return only the final state (no snapshots).
+
+    Optimised for basin mode where only the endpoint matters.
+
+    Args:
+        params: Physics parameters.
+        initial_conditions: (N, 4) float32 array.
+        t_end: End time.
+        dt: Step size.
+        cancel_check: If callable returns True, abort early.
+        progress_callback: Called with (steps_done, total_steps).
+        saddle_energy_val: If provided, freeze trajectories whose total
+            energy drops below this threshold.
+
+    Returns:
+        BasinResult with final_state (N, 4) float32.
+    """
+    n_steps = int(t_end / dt)
+    n_trajectories = initial_conditions.shape[0]
+
+    states = initial_conditions.astype(np.float64)
+
+    # Freeze tracking for early termination
+    frozen = np.zeros(n_trajectories, dtype=bool)
+    all_frozen = False
+
+    for step in range(n_steps):
+        # Cancellation check every 100 steps (~1s response time)
+        if cancel_check is not None and step % 100 == 0:
+            if cancel_check():
+                break
+
+        # Progress reporting
+        if progress_callback is not None and step % 100 == 0:
+            progress_callback(step, n_steps)
+
+        # Early exit when all trajectories are frozen
+        if all_frozen:
+            break
+
+        # RK4 step (no in-place mutation for JAX compat)
+        k1 = derivatives_batch(states, params)
+        k2 = derivatives_batch(states + 0.5 * dt * k1, params)
+        k3 = derivatives_batch(states + 0.5 * dt * k2, params)
+        k4 = derivatives_batch(states + dt * k3, params)
+
+        states_next = states + (dt / 6.0) * (k1 + 2 * k2 + 2 * k3 + k4)
+
+        # Frozen trajectories keep their current state
+        if np.any(frozen):
+            states = np.where(frozen[:, np.newaxis], states, states_next)
+        else:
+            states = states_next
+
+        # Energy-based freeze check
+        if (
+            saddle_energy_val is not None
+            and step % _ENERGY_CHECK_INTERVAL == 0
+            and not all_frozen
+        ):
+            energies = total_energy_batch(states, params)
+            newly_frozen = (~frozen) & (energies < saddle_energy_val)
+            if np.any(newly_frozen):
+                frozen = frozen | newly_frozen
+                all_frozen = bool(np.all(frozen))
+
+    # Final progress
+    if progress_callback is not None:
+        progress_callback(n_steps, n_steps)
+
+    return BasinResult(states.astype(np.float32))

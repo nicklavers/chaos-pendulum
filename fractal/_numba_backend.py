@@ -13,7 +13,7 @@ from __future__ import annotations
 import numpy as np
 from numba import njit, prange
 
-from fractal.compute import BatchResult
+from fractal.compute import BasinResult, BatchResult
 from simulation import DoublePendulumParams
 
 
@@ -165,6 +165,79 @@ def _rk4_batch_numba(
     return snapshots, final_velocities
 
 
+@njit(parallel=True, cache=True)
+def _rk4_basin_numba(
+    initial_conditions,  # (N, 4) float64
+    m1, m2, l1, l2, g, friction,
+    n_steps,
+    dt,
+    saddle_energy_val,  # np.inf means disabled
+):
+    """Numba-compiled parallel RK4 for basin mode (final state only).
+
+    Returns final_state (N, 4) float32.
+    No intermediate snapshots are stored.
+    """
+    n_traj = initial_conditions.shape[0]
+    final_state = np.zeros((n_traj, 4), dtype=np.float32)
+    check_energy = saddle_energy_val < np.inf
+    energy_check_interval = 50
+
+    for i in prange(n_traj):
+        theta1 = initial_conditions[i, 0]
+        theta2 = initial_conditions[i, 1]
+        omega1 = initial_conditions[i, 2]
+        omega2 = initial_conditions[i, 3]
+
+        for step in range(n_steps):
+            # RK4 step
+            k1_t1, k1_t2, k1_o1, k1_o2 = _derivatives_single(
+                theta1, theta2, omega1, omega2,
+                m1, m2, l1, l2, g, friction,
+            )
+
+            ht = 0.5 * dt
+            k2_t1, k2_t2, k2_o1, k2_o2 = _derivatives_single(
+                theta1 + ht * k1_t1, theta2 + ht * k1_t2,
+                omega1 + ht * k1_o1, omega2 + ht * k1_o2,
+                m1, m2, l1, l2, g, friction,
+            )
+
+            k3_t1, k3_t2, k3_o1, k3_o2 = _derivatives_single(
+                theta1 + ht * k2_t1, theta2 + ht * k2_t2,
+                omega1 + ht * k2_o1, omega2 + ht * k2_o2,
+                m1, m2, l1, l2, g, friction,
+            )
+
+            k4_t1, k4_t2, k4_o1, k4_o2 = _derivatives_single(
+                theta1 + dt * k3_t1, theta2 + dt * k3_t2,
+                omega1 + dt * k3_o1, omega2 + dt * k3_o2,
+                m1, m2, l1, l2, g, friction,
+            )
+
+            dt6 = dt / 6.0
+            theta1 = theta1 + dt6 * (k1_t1 + 2 * k2_t1 + 2 * k3_t1 + k4_t1)
+            theta2 = theta2 + dt6 * (k1_t2 + 2 * k2_t2 + 2 * k3_t2 + k4_t2)
+            omega1 = omega1 + dt6 * (k1_o1 + 2 * k2_o1 + 2 * k3_o1 + k4_o1)
+            omega2 = omega2 + dt6 * (k1_o2 + 2 * k2_o2 + 2 * k3_o2 + k4_o2)
+
+            # Energy-based freeze check
+            if check_energy and step % energy_check_interval == 0:
+                energy = _total_energy_single(
+                    theta1, theta2, omega1, omega2,
+                    m1, m2, l1, l2, g,
+                )
+                if energy < saddle_energy_val:
+                    break
+
+        final_state[i, 0] = np.float32(theta1)
+        final_state[i, 1] = np.float32(theta2)
+        final_state[i, 2] = np.float32(omega1)
+        final_state[i, 3] = np.float32(omega2)
+
+    return final_state
+
+
 class NumbaBackend:
     """Numba JIT-compiled compute backend.
 
@@ -207,6 +280,37 @@ class NumbaBackend:
 
         return BatchResult(snapshots, final_velocities)
 
+    def simulate_basin_batch(
+        self,
+        params: DoublePendulumParams,
+        initial_conditions: np.ndarray,
+        t_end: float,
+        dt: float,
+        cancel_check: callable | None = None,
+        progress_callback: callable | None = None,
+        saddle_energy_val: float | None = None,
+    ) -> BasinResult:
+        """Simulate N trajectories, return only the final state.
+
+        Note: cancel_check is not supported inside the Numba kernel.
+        Cancellation happens between progressive levels only.
+        """
+        n_steps = int(t_end / dt)
+        ics = initial_conditions.astype(np.float64)
+        se = np.inf if saddle_energy_val is None else float(saddle_energy_val)
+
+        final_state = _rk4_basin_numba(
+            ics,
+            params.m1, params.m2, params.l1, params.l2, params.g,
+            params.friction,
+            n_steps, dt, se,
+        )
+
+        if progress_callback is not None:
+            progress_callback(n_steps, n_steps)
+
+        return BasinResult(final_state)
+
     @staticmethod
     def warmup() -> None:
         """Trigger JIT compilation with a tiny dummy grid.
@@ -221,5 +325,11 @@ class NumbaBackend:
             dummy_ics,
             1.0, 1.0, 1.0, 1.0, 9.81, 0.0,
             100, 0.01, 10, 10,
+            np.inf,
+        )
+        _rk4_basin_numba(
+            dummy_ics,
+            1.0, 1.0, 1.0, 1.0, 9.81, 0.0,
+            100, 0.01,
             np.inf,
         )

@@ -94,6 +94,35 @@ class CacheKey:
 Constructed via `CacheKey.from_viewport(viewport, params)`. The `params_hash`
 includes `friction` so that different damping coefficients produce different keys.
 
+### `TrajectoryInfo` (fractal/animated_diagram.py)
+
+```python
+@dataclass(frozen=True)
+class TrajectoryInfo:
+    trajectory: np.ndarray          # (n_frames, 4) float32 subsampled state
+    color_rgb: tuple[int, int, int] # basin color as (R, G, B)
+```
+
+Immutable per-trajectory data passed to `MultiTrajectoryDiagram.set_trajectories()`.
+The trajectory is already subsampled (every `FRAME_SUBSAMPLE`th step).
+
+### `PinnedTrajectory` (fractal/inspect_column.py)
+
+```python
+@dataclass(frozen=True)
+class PinnedTrajectory:
+    row_id: str
+    theta1_init: float
+    theta2_init: float
+    trajectory: np.ndarray          # (n_frames, 4) float32 subsampled state
+    n1: int                         # winding number for theta1
+    n2: int                         # winding number for theta2
+    color_rgb: tuple[int, int, int] # basin color as (R, G, B)
+```
+
+Immutable record for a pinned trajectory in the inspect column. Stored in
+`InspectColumn._pinned` dict, rebuilt immutably on add/remove/recolor.
+
 ## Array Shapes
 
 ### Snapshot Array — `(N, 2, n_samples)` float32
@@ -153,6 +182,9 @@ to functions with signature `(theta1: ndarray, theta2: ndarray) -> (N, 4) uint8`
 | `tool_mode_changed` | `FractalControls` | `str` — "zoom", "pan", or "inspect" |
 | `angle_selection_changed` | `FractalControls` | `int` — 0 (theta1), 1 (theta2), or 2 (both) |
 | `zoom_out_clicked` | `FractalControls` | (no payload) |
+| `trajectory_pinned` | `FractalCanvas` | `(str, float, float)` — row_id, theta1, theta2 (inspect click) |
+| `row_removed` | `InspectColumn` | `str` — row_id of removed trajectory |
+| `all_cleared` | `InspectColumn` | (no payload) |
 
 ### Winding Number Arrays — `(N,)` int32
 
@@ -176,3 +208,7 @@ Used by the worker to enable early termination in basin mode.
 | `DEFAULT_DT` | 0.01 | `fractal/view.py` |
 | `LUT_SIZE` | 4096 | `fractal/coloring.py` |
 | `QUANTIZE_FACTOR` | 1e-6 | `fractal/cache.py` |
+| `ANIMATION_INTERVAL_MS` | 33 | `fractal/inspect_column.py` |
+| `FRAME_SUBSAMPLE` | 6 | `fractal/inspect_column.py` |
+| `PAUSE_FRAMES` | 30 | `fractal/animated_diagram.py` |
+| `TRAIL_LENGTH` | 15 | `fractal/animated_diagram.py` |

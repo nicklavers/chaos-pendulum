@@ -200,6 +200,32 @@ WINDING_COLORMAPS: dict[str, Callable[[np.ndarray, np.ndarray], np.ndarray]] = {
 
 
 # ---------------------------------------------------------------------------
+# Single-point helpers
+# ---------------------------------------------------------------------------
+
+def get_single_winding_color(
+    n1: int, n2: int,
+    colormap_fn: Callable[[np.ndarray, np.ndarray], np.ndarray],
+) -> tuple[int, int, int, int]:
+    """Get the BGRA color for a single (n1, n2) winding pair.
+
+    Wraps the vectorized colormap call with length-1 arrays.
+
+    Args:
+        n1: Winding number for theta1.
+        n2: Winding number for theta2.
+        colormap_fn: Function (n1_int32, n2_int32) -> (N, 4) uint8 BGRA.
+
+    Returns:
+        (b, g, r, a) tuple of uint8 values.
+    """
+    n1_arr = np.array([n1], dtype=np.int32)
+    n2_arr = np.array([n2], dtype=np.int32)
+    bgra = colormap_fn(n1_arr, n2_arr)  # (1, 4)
+    return (int(bgra[0, 0]), int(bgra[0, 1]), int(bgra[0, 2]), int(bgra[0, 3]))
+
+
+# ---------------------------------------------------------------------------
 # Pipeline function
 # ---------------------------------------------------------------------------
 

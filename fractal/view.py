@@ -1,10 +1,11 @@
-"""Fractal view: orchestrates canvas, controls, worker, and cache.
+"""Fractal view: orchestrates canvas, controls, worker, cache, and inspect column.
 
 This is the main coordinator for fractal mode. It:
 - Listens to viewport changes from the canvas
 - Checks the cache for existing results
 - Launches FractalWorker for cache misses
 - Feeds completed data to the canvas for display
+- Manages the inspect column (hover display + pinned trajectories)
 """
 
 from __future__ import annotations
@@ -18,12 +19,15 @@ from PyQt6.QtWidgets import QWidget, QHBoxLayout, QSplitter
 from simulation import DoublePendulumParams
 from fractal.canvas import FractalCanvas
 from fractal.controls import FractalControls
+from fractal.inspect_column import InspectColumn
 from fractal.cache import FractalCache, CacheKey
 from fractal.compute import (
     FractalViewport, FractalTask,
     get_default_backend, get_progressive_levels, DEFAULT_N_SAMPLES,
 )
 from fractal.coloring import interpolate_angle
+from fractal._numpy_backend import rk4_single_trajectory
+from fractal.winding import extract_winding_numbers, WINDING_COLORMAPS
 from fractal.worker import FractalWorker
 from ui_common import LoadingOverlay
 
@@ -34,7 +38,7 @@ DEFAULT_DT = 0.01
 
 
 class FractalView(QWidget):
-    """Complete fractal mode: canvas + controls + compute orchestration."""
+    """Complete fractal mode: canvas + controls + inspect column + compute."""
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -53,19 +57,25 @@ class FractalView(QWidget):
             cache_budget = 512 * 1024 * 1024
         self._cache = FractalCache(max_bytes=cache_budget)
 
-        # UI
+        # UI: 3-pane layout [InspectColumn | Canvas | Controls]
+        self.inspect_column = InspectColumn()
         self.canvas = FractalCanvas()
         self.controls = FractalControls()
 
-        splitter = QSplitter(Qt.Orientation.Horizontal)
-        splitter.addWidget(self.canvas)
-        splitter.addWidget(self.controls)
-        splitter.setStretchFactor(0, 3)
-        splitter.setStretchFactor(1, 2)
+        self._splitter = QSplitter(Qt.Orientation.Horizontal)
+        self._splitter.addWidget(self.inspect_column)
+        self._splitter.addWidget(self.canvas)
+        self._splitter.addWidget(self.controls)
+        self._splitter.setStretchFactor(0, 1)  # inspect column
+        self._splitter.setStretchFactor(1, 3)  # canvas
+        self._splitter.setStretchFactor(2, 2)  # controls
+
+        # Start with inspect column hidden
+        self.inspect_column.setVisible(False)
 
         layout = QHBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
-        layout.addWidget(splitter)
+        layout.addWidget(self._splitter)
 
         # Loading overlay
         self.loading_overlay = LoadingOverlay(self.canvas)
@@ -78,6 +88,9 @@ class FractalView(QWidget):
         # Basin display mode
         self._basin_mode = False
         self._current_final_velocities: np.ndarray | None = None
+
+        # Cached final state for basin-mode hover lookup
+        self._basin_final_state: np.ndarray | None = None
 
         # Status labels (AppWindow will read these)
         self._status_text = ""
@@ -92,10 +105,15 @@ class FractalView(QWidget):
         self.controls.physics_changed.connect(self._on_physics_changed)
         self.controls.t_end_changed.connect(self._on_t_end_changed)
         self.controls.zoom_out_clicked.connect(self._on_zoom_out)
-        self.controls.tool_mode_changed.connect(self.canvas.set_tool_mode)
+        self.controls.tool_mode_changed.connect(self._on_tool_mode_changed)
         self.controls.display_mode_changed.connect(self._on_display_mode_changed)
         self.controls.winding_colormap_changed.connect(self._on_winding_colormap_changed)
         self.canvas.hover_updated.connect(self._on_hover_updated)
+
+        # Inspect column signals
+        self.canvas.trajectory_pinned.connect(self._on_trajectory_pinned)
+        self.inspect_column.row_removed.connect(self.canvas.remove_marker)
+        self.inspect_column.all_cleared.connect(self.canvas.clear_markers)
 
     # -- Public interface for mode switching --
 
@@ -341,17 +359,30 @@ class FractalView(QWidget):
         viewport = self.canvas.get_viewport()
         self._start_computation(viewport)
 
+    def _on_tool_mode_changed(self, mode: str) -> None:
+        """Tool mode changed: show/hide inspect column, set canvas mode."""
+        self.canvas.set_tool_mode(mode)
+        show_inspect = (mode == "inspect")
+        self.inspect_column.setVisible(show_inspect)
+
     def _on_display_mode_changed(self, mode: str) -> None:
         """Handle Angle/Basin toggle from controls."""
         self._basin_mode = (mode == "basin")
         self.canvas.set_basin_mode(self._basin_mode)
+        self.inspect_column.set_basin_mode(self._basin_mode)
         self._cache.clear()
+
+        # Clear pinned trajectories on mode switch
+        self.inspect_column.clear_all()
+        self.canvas.clear_markers()
+
         viewport = self.canvas.get_viewport()
         self._start_computation(viewport)
 
     def _on_winding_colormap_changed(self, name: str) -> None:
         """Winding colormap dropdown changed."""
         self.canvas.set_winding_colormap(name)
+        self.inspect_column.set_winding_colormap(name)
 
     def _display_basin(self, final_state: np.ndarray) -> None:
         """Display the final-state winding number image.
@@ -359,19 +390,70 @@ class FractalView(QWidget):
         Args:
             final_state: (N, 4) float32 [theta1, theta2, omega1, omega2].
         """
+        self._basin_final_state = final_state
         theta1_final = final_state[:, 0].astype(np.float32)
         theta2_final = final_state[:, 1].astype(np.float32)
         self.canvas.display_basin_final(theta1_final, theta2_final)
 
+    # -- Inspect tool: hover + click-to-pin --
+
     def _on_hover_updated(self, theta1: float, theta2: float) -> None:
-        """Inspect tool: look up pendulum states and update diagrams."""
+        """Inspect tool: look up data for hovered point and update column."""
+        params = self.controls.get_params()
+
         if self._basin_mode:
-            # Basin mode: show initial angles only (no time series available)
-            params = self.controls.get_params()
-            self.controls.set_inspect_params(params)
-            self.controls.update_inspect(theta1, theta2, theta1, theta2, 0.0)
+            self._on_hover_basin(theta1, theta2, params)
+        else:
+            self._on_hover_angle(theta1, theta2, params)
+
+    def _on_hover_basin(
+        self, theta1: float, theta2: float, params: DoublePendulumParams,
+    ) -> None:
+        """Basin mode hover: show initial diagram + winding circle."""
+        # Look up winding numbers for the hovered point from the final state
+        final_state = self._basin_final_state
+        if final_state is None:
             return
 
+        viewport = self.canvas.get_viewport()
+        res = int(np.sqrt(final_state.shape[0]))
+
+        # Convert hovered physics coords to grid indices
+        half_span1 = viewport.span_theta1 / 2
+        half_span2 = viewport.span_theta2 / 2
+        vmin1 = viewport.center_theta1 - half_span1
+        vmin2 = viewport.center_theta2 - half_span2
+
+        nx = (theta1 - vmin1) / viewport.span_theta1
+        ny = (theta2 - vmin2) / viewport.span_theta2
+
+        col = int(max(0, min(res - 1, round(nx * (res - 1)))))
+        row = int(max(0, min(res - 1, round(ny * (res - 1)))))
+        flat_idx = row * res + col
+
+        # Extract winding numbers for this trajectory
+        theta1_final = float(final_state[flat_idx, 0])
+        theta2_final = float(final_state[flat_idx, 1])
+        n1_arr, n2_arr = extract_winding_numbers(
+            np.array([theta1_final], dtype=np.float32),
+            np.array([theta2_final], dtype=np.float32),
+        )
+        n1, n2 = int(n1_arr[0]), int(n2_arr[0])
+
+        # Get current winding colormap function
+        colormap_name = self.canvas._winding_colormap_name
+        colormap_fn = WINDING_COLORMAPS.get(colormap_name)
+        if colormap_fn is None:
+            return
+
+        self.inspect_column.update_hover_basin(
+            theta1, theta2, n1, n2, colormap_fn, params,
+        )
+
+    def _on_hover_angle(
+        self, theta1: float, theta2: float, params: DoublePendulumParams,
+    ) -> None:
+        """Angle mode hover: show initial diagram + at-t diagram."""
         snapshots = self.canvas._current_snapshots
         if snapshots is None:
             return
@@ -407,11 +489,40 @@ class FractalView(QWidget):
         slider_max = max(1, self.controls.time_slider.maximum())
         t_value = (slider_val / slider_max) * t_end
 
-        # Update the inspect panel
-        params = self.controls.get_params()
-        self.controls.set_inspect_params(params)
-        self.controls.update_inspect(
+        self.inspect_column.update_hover_angle(
             theta1, theta2,
             theta1_at_t, theta2_at_t,
-            t_value,
+            t_value, params,
+        )
+
+    def _on_trajectory_pinned(
+        self, row_id: str, theta1: float, theta2: float,
+    ) -> None:
+        """Canvas click in inspect mode: compute trajectory and add row."""
+        params = self.controls.get_params()
+
+        # Compute t_end for the trajectory
+        if self._basin_mode:
+            mu = max(params.friction, 0.01)
+            t_end = min(5.0 / mu, 500.0)
+        else:
+            t_end = self.controls.get_t_end()
+
+        # Compute the single trajectory via RK4
+        trajectory = rk4_single_trajectory(
+            params, theta1, theta2, t_end, DEFAULT_DT,
+        )
+
+        # Extract winding numbers from the final state
+        final_state = trajectory[-1]
+        n1_arr, n2_arr = extract_winding_numbers(
+            np.array([float(final_state[0])], dtype=np.float32),
+            np.array([float(final_state[1])], dtype=np.float32),
+        )
+        n1, n2 = int(n1_arr[0]), int(n2_arr[0])
+
+        # Pass time params and add row to the inspect column with winding numbers
+        self.inspect_column.set_time_params(t_end, DEFAULT_DT)
+        self.inspect_column.add_row(
+            row_id, theta1, theta2, trajectory, params, n1, n2,
         )
