@@ -381,9 +381,9 @@ class FractalControls(QWidget):
             # Hide angle combo (irrelevant in basin mode)
             self.angle_combo.setVisible(False)
             self._angle_label.setVisible(False)
-            # Auto-set friction to 0.3 if currently zero
+            # Auto-set friction to 0.38 if currently zero
             if self.get_friction() < 0.01:
-                self.set_friction(0.3)
+                self.set_friction(0.38)
             # Swap colormap dropdown to winding colormaps
             current_text = self.colormap_combo.currentText()
             self.colormap_combo.clear()
@@ -392,6 +392,11 @@ class FractalControls(QWidget):
             idx = self.colormap_combo.findText(current_text)
             if idx >= 0:
                 self.colormap_combo.setCurrentIndex(idx)
+            else:
+                # Default to Basin Hash on first switch to basin mode
+                basin_idx = self.colormap_combo.findText("Basin Hash")
+                if basin_idx >= 0:
+                    self.colormap_combo.setCurrentIndex(basin_idx)
         else:
             # Show time group and simulation group
             self._time_group.setVisible(True)

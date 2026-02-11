@@ -29,7 +29,7 @@ from fractal.bivariate import (
 )
 from fractal.winding import (
     winding_to_argb, build_winding_legend, WINDING_COLORMAPS,
-    winding_modular_grid,
+    winding_basin_hash,
 )
 
 
@@ -165,12 +165,14 @@ class FractalCanvas(QWidget):
 
         # Basin (winding number) mode state
         self._basin_mode = False
-        self._winding_colormap_name = "Modular Grid (5\u00d75)"
-        self._winding_colormap_fn = winding_modular_grid
+        self._winding_colormap_name = "Basin Hash"
+        self._winding_colormap_fn = winding_basin_hash
         self._cached_winding_legend_name: str | None = None
         self._cached_winding_legend_image = None
         self._basin_theta1_final: np.ndarray | None = None
         self._basin_theta2_final: np.ndarray | None = None
+        self._basin_theta1_init: np.ndarray | None = None
+        self._basin_theta2_init: np.ndarray | None = None
         self._basin_convergence_times: np.ndarray | None = None
 
         # Tool mode
@@ -283,6 +285,8 @@ class FractalCanvas(QWidget):
         theta1_final: np.ndarray,
         theta2_final: np.ndarray,
         convergence_times: np.ndarray | None = None,
+        theta1_init: np.ndarray | None = None,
+        theta2_init: np.ndarray | None = None,
     ) -> None:
         """Update display in basin mode from final angles and convergence times.
 
@@ -290,11 +294,15 @@ class FractalCanvas(QWidget):
             theta1_final: (N,) float32 array of final unwrapped theta1 values.
             theta2_final: (N,) float32 array of final unwrapped theta2 values.
             convergence_times: (N,) float32 array of convergence times.
+            theta1_init: (N,) float32 array of initial theta1 values (for relative winding).
+            theta2_init: (N,) float32 array of initial theta2 values (for relative winding).
         """
         self._basin_mode = True
         self._current_snapshots = None  # No time series in basin mode
         self._basin_theta1_final = theta1_final
         self._basin_theta2_final = theta2_final
+        self._basin_theta1_init = theta1_init
+        self._basin_theta2_init = theta2_init
         self._basin_convergence_times = convergence_times
         self._rebuild_image()
 
@@ -496,6 +504,8 @@ class FractalCanvas(QWidget):
             self._winding_colormap_fn,
             res,
             convergence_times=self._basin_convergence_times,
+            theta1_init=self._basin_theta1_init,
+            theta2_init=self._basin_theta2_init,
         )
         self._current_image = numpy_to_qimage(argb)
         self.update()

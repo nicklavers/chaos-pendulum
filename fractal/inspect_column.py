@@ -86,7 +86,7 @@ class InspectColumn(QWidget):
         self._primary_id: str | None = None
         self._indicators: dict[str, TrajectoryIndicator] = {}
         self._basin_mode = False
-        self._winding_colormap_name = "Modular Grid (5\u00d75)"
+        self._winding_colormap_name = "Basin Hash"
         self._current_params = DoublePendulumParams()
         self._dt = 0.01
         self._t_end = 10.0
@@ -465,6 +465,46 @@ class InspectColumn(QWidget):
 
         # Rebuild animation with new colors
         self._rebuild_animation()
+
+    def update_winding(self, row_id: str, n1: int, n2: int) -> None:
+        """Update winding numbers for a pinned trajectory (definition toggle).
+
+        Immutably rebuilds the PinnedTrajectory with new n1/n2 and color,
+        updates the indicator widget, and rebuilds the animation.
+
+        Args:
+            row_id: Trajectory identifier.
+            n1: New winding number for theta1.
+            n2: New winding number for theta2.
+        """
+        pt = self._pinned.get(row_id)
+        if pt is None:
+            return
+
+        new_color = self._lookup_basin_color(n1, n2)
+        rebuilt_pt = PinnedTrajectory(
+            row_id=pt.row_id,
+            theta1_init=pt.theta1_init,
+            theta2_init=pt.theta2_init,
+            trajectory=pt.trajectory,
+            n1=n1,
+            n2=n2,
+            color_rgb=new_color,
+        )
+        self._pinned = {**self._pinned, row_id: rebuilt_pt}
+
+        # Update indicator
+        indicator = self._indicators.get(row_id)
+        if indicator is not None:
+            indicator.set_winding(n1, n2)
+            indicator.set_color(new_color)
+
+        # Rebuild animation with updated colors
+        self._rebuild_animation()
+
+    def get_pinned(self) -> dict[str, PinnedTrajectory]:
+        """Return the current pinned trajectories (read-only view)."""
+        return dict(self._pinned)
 
     def get_marker_colors(self) -> dict[str, tuple[int, int, int]]:
         """Return {row_id: (R, G, B)} for all pinned trajectories."""

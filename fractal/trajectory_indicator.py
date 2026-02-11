@@ -1,34 +1,70 @@
-"""TrajectoryIndicator: small clickable circle for the indicator row.
+"""TrajectoryIndicator: vertical Venn diagram winding number indicator.
 
-Displays a filled circle colored by the trajectory's basin color,
-with winding numbers (n1, n2) inside. Initial angles shown as tiny
-text below. Click to foreground; hover X button to remove.
+Displays two linked rings (vertical Venn diagram) where each ring's
+tapered arcs encode the winding number: |n| arcs each spanning 360/|n|
+degrees, fat at the tail and tapering to a point. Top ring = arm 1 (n1),
+bottom ring = arm 2 (n2). Click to foreground; hover X button to remove.
+
+Draw order: gray bg circles, then top arcs (behind), then bottom arcs
+(in front), then digits on top of everything.
 """
 
 from __future__ import annotations
 
 import math
 
-from PyQt6.QtCore import Qt, QSize, pyqtSignal
+from PyQt6.QtCore import Qt, QSize, QRectF, pyqtSignal
 from PyQt6.QtGui import (
-    QColor, QFont, QFontMetrics, QPainter, QPen, QMouseEvent, QPaintEvent,
+    QColor, QFont, QFontMetrics, QPainter, QPainterPath, QPen,
+    QMouseEvent, QPaintEvent,
 )
 from PyQt6.QtWidgets import QWidget
 
+from fractal.arrow_arc import draw_tapered_arcs
+
 
 # Layout constants
-CIRCLE_DIAMETER = 44
+CIRCLE_DIAMETER = 32
+CIRCLE_RADIUS = CIRCLE_DIAMETER / 2
+OVERLAP_FRAC = 0.35
+OVERLAP_PX = int(CIRCLE_DIAMETER * OVERLAP_FRAC)  # ~11px
+VENN_SPAN = 2 * CIRCLE_DIAMETER - OVERLAP_PX
+
 HIGHLIGHT_BORDER = 3
 HOVER_BORDER = 2
 REMOVE_BTN_SIZE = 14
+TOP_PADDING = 2
+
+WIDGET_WIDTH = CIRCLE_DIAMETER + 8   # 40
+MIN_HEIGHT = VENN_SPAN + 28          # ~81
+
+# Neutral gray background for the circles
+NEUTRAL_BG = QColor(55, 55, 70)
+OUTLINE_COLOR = QColor(20, 20, 30)
+
+# Digit rendering
+DIGIT_FONT_SIZE = 13
+DIGIT_OFFSET_FRAC = 0.15  # fraction of diameter; smaller = closer to center
+
+
+def _format_winding(n: int) -> str:
+    """Format winding number with + prefix for positive values."""
+    if n > 0:
+        return f"+{n}"
+    return str(n)
 
 
 class TrajectoryIndicator(QWidget):
-    """Small colored circle indicator for a pinned trajectory.
+    """Vertical Venn diagram indicator for a pinned trajectory.
+
+    Two linked rings where tapered arcs encode winding numbers.
+    Basin-colored arcs with dark outline on neutral gray background.
 
     Signals:
-        clicked(row_id): Emitted when the circle is clicked (foreground).
+        clicked(row_id): Emitted when the indicator is clicked (foreground).
         remove_clicked(row_id): Emitted when the X button is clicked.
+        hovered(row_id): Emitted on mouse enter.
+        unhovered(row_id): Emitted on mouse leave.
     """
 
     clicked = pyqtSignal(str)
@@ -76,77 +112,101 @@ class TrajectoryIndicator(QWidget):
         self._color_rgb = color_rgb
         self.update()
 
+    def set_winding(self, n1: int, n2: int) -> None:
+        """Update winding numbers (for definition toggle changes)."""
+        self._n1 = n1
+        self._n2 = n2
+        self.update()
+
     def sizeHint(self) -> QSize:
-        """Preferred size: circle + text below."""
-        return QSize(CIRCLE_DIAMETER + 8, CIRCLE_DIAMETER + 28)
+        """Preferred size: Venn diagram + text below."""
+        return QSize(WIDGET_WIDTH, MIN_HEIGHT)
 
     def minimumSizeHint(self) -> QSize:
         """Minimum size."""
-        return QSize(CIRCLE_DIAMETER + 4, CIRCLE_DIAMETER + 24)
+        return QSize(WIDGET_WIDTH - 4, MIN_HEIGHT - 4)
+
+    # --- Geometry helpers ---
+
+    def _circle_centers(self) -> tuple[float, float, float]:
+        """Return (cx, cy_top, cy_bottom) for the two circles."""
+        cx = self.width() / 2.0
+        cy_top = TOP_PADDING + CIRCLE_RADIUS
+        cy_bottom = cy_top + CIRCLE_DIAMETER - OVERLAP_PX
+        return cx, cy_top, cy_bottom
 
     # --- Painting ---
 
     def paintEvent(self, event: QPaintEvent) -> None:
-        """Draw the colored circle with winding numbers, and angle text below."""
+        """Draw the Venn diagram with tapered arcs and winding digits.
+
+        Multi-pass draw order:
+        1. Gray bg circles (behind everything)
+        2. Top circle arcs (behind bottom's arcs)
+        3. Bottom circle arcs (in front of top's)
+        4. Digits on top of everything
+        5. Highlight/hover border
+        6. Angle text and X button
+        """
         painter = QPainter(self)
         painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
 
-        w = self.width()
+        cx, cy_top, cy_bottom = self._circle_centers()
+        r = CIRCLE_RADIUS
+        basin_color = QColor(*self._color_rgb)
+        digit_offset = CIRCLE_DIAMETER * DIGIT_OFFSET_FRAC
 
-        # Circle center
-        cx = w / 2
-        cy = CIRCLE_DIAMETER / 2 + 2
-        r = CIRCLE_DIAMETER / 2
-
-        # Fill circle with basin color
-        fill_color = QColor(*self._color_rgb)
+        # Pass 1: Gray background circles
         painter.setPen(Qt.PenStyle.NoPen)
-        painter.setBrush(fill_color)
-        painter.drawEllipse(int(cx - r), int(cy - r), CIRCLE_DIAMETER, CIRCLE_DIAMETER)
-
-        # Highlight border (white) when primary
-        if self._highlighted:
-            border_pen = QPen(QColor(255, 255, 255), HIGHLIGHT_BORDER)
-            painter.setPen(border_pen)
-            painter.setBrush(Qt.BrushStyle.NoBrush)
-            painter.drawEllipse(
-                int(cx - r + 1), int(cy - r + 1),
-                CIRCLE_DIAMETER - 2, CIRCLE_DIAMETER - 2,
-            )
-        elif self._hovered:
-            border_pen = QPen(QColor(200, 200, 200, 120), HOVER_BORDER)
-            painter.setPen(border_pen)
-            painter.setBrush(Qt.BrushStyle.NoBrush)
-            painter.drawEllipse(
-                int(cx - r + 1), int(cy - r + 1),
-                CIRCLE_DIAMETER - 2, CIRCLE_DIAMETER - 2,
-            )
-
-        # Winding numbers inside circle — pick contrasting text color
-        brightness = (
-            0.299 * self._color_rgb[0]
-            + 0.587 * self._color_rgb[1]
-            + 0.114 * self._color_rgb[2]
+        painter.setBrush(NEUTRAL_BG)
+        painter.drawEllipse(
+            QRectF(cx - r, cy_bottom - r, CIRCLE_DIAMETER, CIRCLE_DIAMETER),
         )
-        text_color = QColor(0, 0, 0) if brightness > 128 else QColor(255, 255, 255)
+        painter.drawEllipse(
+            QRectF(cx - r, cy_top - r, CIRCLE_DIAMETER, CIRCLE_DIAMETER),
+        )
 
-        winding_font = QFont("Helvetica", 8, QFont.Weight.Bold)
-        painter.setFont(winding_font)
-        painter.setPen(text_color)
-        fm = QFontMetrics(winding_font)
+        # Pass 2: Top circle arcs (drawn first = behind bottom's)
+        draw_tapered_arcs(
+            painter, cx, cy_top, r, self._n1, basin_color, OUTLINE_COLOR,
+        )
 
-        line1 = f"n\u2081={self._n1}"
-        line2 = f"n\u2082={self._n2}"
-        tw1 = fm.horizontalAdvance(line1)
-        tw2 = fm.horizontalAdvance(line2)
-        line_h = fm.height()
+        # Pass 3: Bottom circle arcs (drawn second = in front of top's)
+        draw_tapered_arcs(
+            painter, cx, cy_bottom, r, self._n2, basin_color, OUTLINE_COLOR,
+        )
 
-        # Two lines centered vertically in circle
-        text_y_start = cy - line_h + fm.ascent() - 1
-        painter.drawText(int(cx - tw1 / 2), int(text_y_start), line1)
-        painter.drawText(int(cx - tw2 / 2), int(text_y_start + line_h), line2)
+        # Pass 4: Digits on top of everything (outlined text)
+        self._draw_digit(
+            painter, cx, cy_top - digit_offset, self._n1,
+            basin_color, OUTLINE_COLOR,
+        )
+        self._draw_digit(
+            painter, cx, cy_bottom + digit_offset, self._n2,
+            basin_color, OUTLINE_COLOR,
+        )
 
-        # Initial angles as tiny text below the circle
+        # Pass 5: Highlight / hover border around unified figure-8 contour
+        if self._highlighted or self._hovered:
+            border_path = QPainterPath()
+            inset = 1.0
+            d = CIRCLE_DIAMETER - 2 * inset
+            border_path.addEllipse(
+                QRectF(cx - r + inset, cy_top - r + inset, d, d),
+            )
+            border_path.addEllipse(
+                QRectF(cx - r + inset, cy_bottom - r + inset, d, d),
+            )
+            unified = border_path.simplified()
+
+            width = HIGHLIGHT_BORDER if self._highlighted else HOVER_BORDER
+            alpha = 255 if self._highlighted else 120
+            border_pen = QPen(QColor(255, 255, 255, alpha), width)
+            painter.setPen(border_pen)
+            painter.setBrush(Qt.BrushStyle.NoBrush)
+            painter.drawPath(unified)
+
+        # Pass 6a: Initial angles as tiny text below the bottom circle
         angle_font = QFont("Helvetica", 7)
         painter.setFont(angle_font)
         painter.setPen(QColor(170, 170, 170))
@@ -156,54 +216,91 @@ class TrajectoryIndicator(QWidget):
         deg2 = math.degrees(self._theta2_init)
         angle_text = f"{deg1:.0f}\u00b0, {deg2:.0f}\u00b0"
         atw = afm.horizontalAdvance(angle_text)
-        angle_y = int(cy + r + 4 + afm.ascent())
+        angle_y = int(cy_bottom + r + 4 + afm.ascent())
         painter.drawText(int(cx - atw / 2), angle_y, angle_text)
 
-        # X button (top-right of circle, shown on hover)
+        # Pass 6b: X button (top-right of top circle, on hover)
         if self._hovered:
-            xr = REMOVE_BTN_SIZE / 2
-            xc_x = cx + r - 4
-            xc_y = cy - r + 4
-            painter.setPen(Qt.PenStyle.NoPen)
-            painter.setBrush(QColor(60, 60, 60, 200))
-            painter.drawEllipse(
-                int(xc_x - xr), int(xc_y - xr),
-                REMOVE_BTN_SIZE, REMOVE_BTN_SIZE,
-            )
-            x_font = QFont("Helvetica", 8, QFont.Weight.Bold)
-            painter.setFont(x_font)
-            painter.setPen(QColor(255, 100, 100))
-            xfm = QFontMetrics(x_font)
-            xtw = xfm.horizontalAdvance("\u2715")
-            painter.drawText(
-                int(xc_x - xtw / 2), int(xc_y + xfm.ascent() / 2 - 1), "\u2715",
-            )
+            self._draw_remove_button(painter, cx, cy_top, r)
 
         painter.end()
+
+    @staticmethod
+    def _draw_digit(
+        painter: QPainter,
+        cx: float,
+        cy: float,
+        n: int,
+        basin_color: QColor,
+        outline_color: QColor,
+    ) -> None:
+        """Draw a winding number digit with outline at (cx, cy)."""
+        font = QFont("Helvetica", DIGIT_FONT_SIZE, QFont.Weight.Bold)
+        painter.setFont(font)
+        fm = QFontMetrics(font)
+
+        digit = _format_winding(n)
+        tw = fm.horizontalAdvance(digit)
+        text_x = int(cx - tw / 2)
+        text_y = int(cy + fm.ascent() / 2 - 1)
+
+        # Outline (4 offsets)
+        painter.setPen(outline_color)
+        for dx, dy in [(-1, 0), (1, 0), (0, -1), (0, 1)]:
+            painter.drawText(text_x + dx, text_y + dy, digit)
+
+        # Fill
+        painter.setPen(basin_color)
+        painter.drawText(text_x, text_y, digit)
+
+    @staticmethod
+    def _draw_remove_button(
+        painter: QPainter,
+        cx: float,
+        cy_top: float,
+        r: float,
+    ) -> None:
+        """Draw the X remove button at top-right of top circle."""
+        xr = REMOVE_BTN_SIZE / 2
+        xc_x = cx + r - 4
+        xc_y = cy_top - r + 4
+        painter.setPen(Qt.PenStyle.NoPen)
+        painter.setBrush(QColor(60, 60, 60, 200))
+        painter.drawEllipse(
+            int(xc_x - xr), int(xc_y - xr),
+            REMOVE_BTN_SIZE, REMOVE_BTN_SIZE,
+        )
+        x_font = QFont("Helvetica", 8, QFont.Weight.Bold)
+        painter.setFont(x_font)
+        painter.setPen(QColor(255, 100, 100))
+        xfm = QFontMetrics(x_font)
+        xtw = xfm.horizontalAdvance("\u2715")
+        painter.drawText(
+            int(xc_x - xtw / 2), int(xc_y + xfm.ascent() / 2 - 1),
+            "\u2715",
+        )
 
     # --- Mouse events ---
 
     def mousePressEvent(self, event: QMouseEvent) -> None:
-        """Handle click: check if on X button or circle."""
+        """Handle click: check if on X button or inside either circle."""
         if event.button() != Qt.MouseButton.LeftButton:
             super().mousePressEvent(event)
             return
 
-        w = self.width()
-        cx = w / 2
-        cy = CIRCLE_DIAMETER / 2 + 2
-        r = CIRCLE_DIAMETER / 2
-
-        # Check if click is on the X button area (top-right)
+        cx, cy_top, cy_bottom = self._circle_centers()
+        r = CIRCLE_RADIUS
         mx, my = event.position().x(), event.position().y()
+
+        # Check X button area (top-right of top circle)
         xc_x = cx + r - 4
-        xc_y = cy - r + 4
+        xc_y = cy_top - r + 4
         dist_to_x = math.sqrt((mx - xc_x) ** 2 + (my - xc_y) ** 2)
         if dist_to_x <= REMOVE_BTN_SIZE / 2 + 2:
             self.remove_clicked.emit(self._row_id)
             return
 
-        # Otherwise, foreground click
+        # Click anywhere on the widget foregrounds this trajectory
         self.clicked.emit(self._row_id)
 
     def enterEvent(self, event) -> None:
@@ -220,5 +317,5 @@ class TrajectoryIndicator(QWidget):
 
     def _init_ui(self) -> None:
         """Set fixed width and minimum height."""
-        self.setFixedWidth(CIRCLE_DIAMETER + 8)
-        self.setMinimumHeight(CIRCLE_DIAMETER + 24)
+        self.setFixedWidth(WIDGET_WIDTH)
+        self.setMinimumHeight(MIN_HEIGHT - 4)

@@ -1,8 +1,11 @@
-"""WindingCircle: small widget showing winding numbers inside a colored circle.
+"""WindingCircle: Venn diagram showing winding numbers with tapered arcs.
 
-Displays the (n1, n2) winding pair as text inside a filled circle whose
-color matches the active winding colormap. Used in the inspect column
-to replace the "At t" diagram in basin mode.
+Displays a vertical Venn diagram (two linked rings) whose tapered arcs
+encode the winding count for each pendulum arm. Used in the inspect
+column hover section for basin mode.
+
+Draw order: gray bg circles, then top arcs (behind), then bottom arcs
+(in front), then digits on top of everything.
 """
 
 from __future__ import annotations
@@ -10,28 +13,33 @@ from __future__ import annotations
 from collections.abc import Callable
 
 import numpy as np
-from PyQt6.QtCore import Qt
+from PyQt6.QtCore import Qt, QRectF
 from PyQt6.QtGui import QPainter, QColor, QFont, QFontMetrics
 from PyQt6.QtWidgets import QWidget
 
+from fractal.arrow_arc import draw_tapered_arcs
 from fractal.winding import get_single_winding_color
 
 
 # Drawing constants
 BACKGROUND_COLOR = QColor(30, 30, 45)
-CIRCLE_RADIUS_FRAC = 0.38  # fraction of min(width, height)
-TEXT_COLOR_LIGHT = QColor(240, 240, 240)
-TEXT_COLOR_DARK = QColor(30, 30, 30)
+NEUTRAL_BG = QColor(55, 55, 70)
+OUTLINE_COLOR = QColor(20, 20, 30)
+OVERLAP_FRAC = 0.35
 LABEL_COLOR = QColor(180, 180, 190)
+DIGIT_FONT_SIZE = 13
+DIGIT_OFFSET_FRAC = 0.15
 
 
-def _perceived_brightness(r: int, g: int, b: int) -> float:
-    """Compute perceived brightness (0-255) for text color selection."""
-    return 0.299 * r + 0.587 * g + 0.114 * b
+def _format_winding(n: int) -> str:
+    """Format winding number with + prefix for positive values."""
+    if n > 0:
+        return f"+{n}"
+    return str(n)
 
 
 class WindingCircle(QWidget):
-    """Small widget that draws a colored circle with winding numbers inside."""
+    """Venn diagram widget showing winding numbers with tapered arcs."""
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
@@ -69,12 +77,19 @@ class WindingCircle(QWidget):
         self.update()
 
     def set_label(self, text: str) -> None:
-        """Set the label shown above the circle."""
+        """Set the label shown above the Venn diagram."""
         self._label = text
         self.update()
 
     def paintEvent(self, event) -> None:
-        """Draw the colored circle with winding numbers."""
+        """Draw the Venn diagram with tapered arcs and winding digits.
+
+        Multi-pass draw order:
+        1. Gray bg circles (behind everything)
+        2. Top circle arcs (behind bottom's arcs)
+        3. Bottom circle arcs (in front of top's)
+        4. Digits on top of everything
+        """
         painter = QPainter(self)
         painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
         painter.fillRect(self.rect(), BACKGROUND_COLOR)
@@ -93,47 +108,85 @@ class WindingCircle(QWidget):
             tw = fm.horizontalAdvance(self._label)
             painter.drawText(int((w - tw) / 2), fm.ascent() + 2, self._label)
 
-        # Compute circle geometry
+        if self._n1 is None or self._n2 is None:
+            painter.end()
+            return
+
+        # Compute sub-circle geometry to fit within available space
         usable_h = h - label_height - 8
         usable_w = w - 8
-        radius = int(min(usable_w, usable_h) * CIRCLE_RADIUS_FRAC)
-        cx = w / 2
-        cy = label_height + (h - label_height) / 2
+        cx = w / 2.0
 
-        # Draw filled circle
+        # Each sub-circle diameter: fit two circles with overlap vertically
+        # total_span = 2*d - overlap = 2*d - 0.35*d = 1.65*d
+        max_d_from_h = usable_h / (2.0 - OVERLAP_FRAC)
+        max_d_from_w = usable_w
+        d = min(max_d_from_h, max_d_from_w)
+        radius = d / 2.0
+        overlap = d * OVERLAP_FRAC
+
+        total_span = 2 * d - overlap
+        venn_top = label_height + (h - label_height - total_span) / 2.0
+        cy_top = venn_top + radius
+        cy_bottom = cy_top + d - overlap
+
+        basin_color = self._fill_color
+        digit_offset = d * DIGIT_OFFSET_FRAC
+
+        # Pass 1: Gray background circles
         painter.setPen(Qt.PenStyle.NoPen)
-        painter.setBrush(self._fill_color)
-        painter.drawEllipse(
-            int(cx - radius), int(cy - radius),
-            radius * 2, radius * 2,
+        painter.setBrush(NEUTRAL_BG)
+        painter.drawEllipse(QRectF(cx - radius, cy_bottom - radius, d, d))
+        painter.drawEllipse(QRectF(cx - radius, cy_top - radius, d, d))
+
+        # Pass 2: Top circle arcs (drawn first = behind bottom's)
+        draw_tapered_arcs(
+            painter, cx, cy_top, radius, self._n1,
+            basin_color, OUTLINE_COLOR,
         )
 
-        # Draw winding text inside
-        if self._n1 is not None and self._n2 is not None:
-            # Choose text color based on fill brightness
-            r = self._fill_color.red()
-            g = self._fill_color.green()
-            b = self._fill_color.blue()
-            brightness = _perceived_brightness(r, g, b)
-            text_color = TEXT_COLOR_DARK if brightness > 128 else TEXT_COLOR_LIGHT
+        # Pass 3: Bottom circle arcs (drawn second = in front of top's)
+        draw_tapered_arcs(
+            painter, cx, cy_bottom, radius, self._n2,
+            basin_color, OUTLINE_COLOR,
+        )
 
-            painter.setPen(text_color)
-
-            # Draw n1, n2 on two lines
-            text_font = QFont("Helvetica", 13, QFont.Weight.Bold)
-            painter.setFont(text_font)
-            fm = QFontMetrics(text_font)
-
-            line1 = f"n\u2081={self._n1}"
-            line2 = f"n\u2082={self._n2}"
-
-            tw1 = fm.horizontalAdvance(line1)
-            tw2 = fm.horizontalAdvance(line2)
-            line_h = fm.height()
-            total_h = 2 * line_h
-
-            y_start = cy - total_h / 2 + fm.ascent()
-            painter.drawText(int(cx - tw1 / 2), int(y_start), line1)
-            painter.drawText(int(cx - tw2 / 2), int(y_start + line_h), line2)
+        # Pass 4: Digits on top of everything (outlined text)
+        self._draw_digit(
+            painter, cx, cy_top - digit_offset, self._n1,
+            basin_color, OUTLINE_COLOR,
+        )
+        self._draw_digit(
+            painter, cx, cy_bottom + digit_offset, self._n2,
+            basin_color, OUTLINE_COLOR,
+        )
 
         painter.end()
+
+    @staticmethod
+    def _draw_digit(
+        painter: QPainter,
+        cx: float,
+        cy: float,
+        n: int,
+        basin_color: QColor,
+        outline_color: QColor,
+    ) -> None:
+        """Draw a winding number digit with outline at (cx, cy)."""
+        font = QFont("Helvetica", DIGIT_FONT_SIZE, QFont.Weight.Bold)
+        painter.setFont(font)
+        fm = QFontMetrics(font)
+
+        digit = _format_winding(n)
+        tw = fm.horizontalAdvance(digit)
+        text_x = int(cx - tw / 2)
+        text_y = int(cy + fm.ascent() / 2 - 1)
+
+        # Outline (4 offsets)
+        painter.setPen(outline_color)
+        for dx, dy in [(-1, 0), (1, 0), (0, -1), (0, 1)]:
+            painter.drawText(text_x + dx, text_y + dy, digit)
+
+        # Fill
+        painter.setPen(basin_color)
+        painter.drawText(text_x, text_y, digit)

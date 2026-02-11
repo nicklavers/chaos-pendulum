@@ -27,9 +27,10 @@ chaos-pendulum/
         view.py                     528 lines   FractalView: orchestration, signal wiring
         inspect_column.py           609 lines   InspectColumn: hover + stacked animation + scrub
         animated_diagram.py         373 lines   MultiTrajectoryDiagram: ghost IC + basin-colored bobs
-        trajectory_indicator.py     220 lines   TrajectoryIndicator: clickable circle with winding numbers
+        trajectory_indicator.py     316 lines   TrajectoryIndicator: Venn diagram with tapered arcs
         pendulum_diagram.py         133 lines   PendulumDiagram: stick-figure widget
-        winding_circle.py           139 lines   WindingCircle: colored circle for basin hover
+        winding_circle.py           193 lines   WindingCircle: Venn diagram for basin hover
+        arrow_arc.py                188 lines   Tapered arc geometry + QPainter drawing
         worker.py                   120 lines   FractalWorker QThread (dispatches to backend RK4)
         compute.py                  183 lines   ComputeBackend Protocol, BatchResult, BasinResult, saddle_energy
         basin_solver.py             131 lines   DOP853 adaptive solver (UNUSED — see ADR-0013)
@@ -53,6 +54,7 @@ chaos-pendulum/
         test_energy_termination.py             Freeze behavior, speedup, winding stability
         test_inspect_utils.py                  rk4_single_trajectory + get_single_winding_color
         test_multi_trajectory.py               TrajectoryInfo, PinnedTrajectory, color lookup, constants
+        test_arrow_arc.py                      Tapered arc geometry: compute_tapered_arcs pure math
 ```
 
 **Total**: ~5,800 lines across ~30 modules.
@@ -96,9 +98,9 @@ main.py --> app_window.py
                     |     --> fractal/pendulum_diagram.py --> simulation.py
                     --> fractal/inspect_column.py
                     |     --> fractal/animated_diagram.py --> simulation.py
-                    |     --> fractal/trajectory_indicator.py
+                    |     --> fractal/trajectory_indicator.py --> fractal/arrow_arc.py
                     |     --> fractal/pendulum_diagram.py
-                    |     --> fractal/winding_circle.py
+                    |     --> fractal/winding_circle.py --> fractal/arrow_arc.py
                     |     --> fractal/winding.py
                     --> fractal/worker.py     --> fractal/compute.py
                     |                              --> fractal/_numpy_backend.py

@@ -42,14 +42,20 @@ Top-level `QWidget` shown to the left of the canvas in inspect mode.
 - `max_frames` property — length of longest trajectory
 - `frame_idx` property — current frame index
 
-### TrajectoryIndicator (fractal/trajectory_indicator.py, ~220 lines)
+### TrajectoryIndicator (fractal/trajectory_indicator.py, ~316 lines)
 
-Small clickable circle widget with basin color fill, winding numbers inside,
-initial angles below, and an X button (shown on hover) for removal.
+Vertical Venn diagram (two linked rings) with tapered arcs encoding winding
+numbers. Top ring = arm 1 (n1), bottom ring = arm 2 (n2). Each ring shows
+|n| tapered arc segments spanning 360/|n| degrees each, fat at the tail and
+tapering to a point; n=0 shows a thin dotted outline. Positive n = CCW
+(counter-clockwise), negative = CW (clockwise).
 
-- `set_highlighted(bool)` — white border for primary trajectory
+- 32px diameter per sub-circle, 35% overlap (~11px) → ~53px total vertical span
+- Neutral gray (55,55,70) background circles; basin-colored tapered arcs with dark outline
+- Winding number digit (13pt bold, +prefix for positive) offset toward circle center
+- Multi-pass draw order: bg circles → top arcs → bottom arcs → digits
+- `set_highlighted(bool)` — white border around unified figure-8 contour
 - `set_color(rgb)` — update fill color (e.g. on colormap change)
-- Contrasting text color auto-selected via brightness formula
 - **Signals**: `clicked(str)`, `remove_clicked(str)`, `hovered(str)`, `unhovered(str)`
 
 ### PendulumDiagram (fractal/pendulum_diagram.py, ~133 lines)
@@ -61,10 +67,24 @@ Small `QWidget` that draws a double-pendulum stick figure at given angles.
 - `set_label(text)` — label above diagram (e.g. "Initial (t=0)", "At t = 12.5 s")
 - Colors: bob1 orange (255,120,80), bob2 cyan (80,200,255), arms white, pivot grey
 
-### WindingCircle (fractal/winding_circle.py, ~139 lines)
+### WindingCircle (fractal/winding_circle.py, ~193 lines)
 
-Small colored circle widget for basin-mode hover. Displays winding numbers
-(n1, n2) with the basin colormap color fill.
+Vertical Venn diagram for basin-mode hover. Same linked-rings design as
+TrajectoryIndicator but dynamically sized to fit its container (typically
+110x110px). Neutral gray background circles with basin-colored tapered arcs
+and dark outline. Multi-pass draw order matches TrajectoryIndicator.
+
+### TaperedArc (fractal/arrow_arc.py, ~188 lines)
+
+Pure geometry + QPainter drawing functions for tapered arc segments. Shared
+by both TrajectoryIndicator and WindingCircle. Convention: 0° = top,
+positive = clockwise. Direction: positive n = CCW, negative n = CW.
+
+- `compute_tapered_arcs(n)` — returns list of `TaperedArc(start_deg, span_deg, clockwise)`
+- `build_tapered_arc_polygon(cx, cy, arc_r, ...)` — returns QPolygonF for a single tapered arc
+- `draw_tapered_arcs(painter, cx, cy, radius, n, fill_color, outline_color)` — render all arcs
+- n=0: thin dotted circle; n≥1: |n| tapered arc polygons (fat tail → pointed tip)
+- Jaunty rotation offset so all winding numbers start at the same angle as n=1
 
 ## Time Scrubbing
 

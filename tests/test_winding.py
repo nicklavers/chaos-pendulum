@@ -7,6 +7,7 @@ import pytest
 
 from fractal.winding import (
     extract_winding_numbers,
+    extract_winding_numbers_relative,
     winding_modular_grid,
     winding_basin_hash,
     winding_to_argb,
@@ -74,6 +75,75 @@ class TestExtractWindingNumbers:
     def test_output_dtype(self):
         theta = np.array([0.0, 1.0], dtype=np.float32)
         n1, n2 = extract_winding_numbers(theta, theta)
+        assert n1.dtype == np.int32
+        assert n2.dtype == np.int32
+
+
+class TestExtractWindingNumbersRelative:
+    """Test relative winding: round(final/2π) - round(init/2π)."""
+
+    def test_zero_init_zero_final(self):
+        """Both zero → relative winding (0, 0)."""
+        z = np.array([0.0], dtype=np.float32)
+        n1, n2 = extract_winding_numbers_relative(z, z, z, z)
+        assert n1[0] == 0
+        assert n2[0] == 0
+
+    def test_agrees_with_absolute_when_init_near_zero(self):
+        """When init ≈ 0, relative should match absolute."""
+        two_pi = np.float32(2.0 * math.pi)
+        init = np.array([0.1], dtype=np.float32)
+        final = np.array([two_pi + 0.1], dtype=np.float32)
+        n1_abs, _ = extract_winding_numbers(final, final)
+        n1_rel, _ = extract_winding_numbers_relative(final, final, init, init)
+        assert n1_abs[0] == 1
+        assert n1_rel[0] == 1
+
+    def test_off_by_one_case(self):
+        """init near 0.9*2π, final near 1.1*2π → absolute +1, relative 0."""
+        two_pi = 2.0 * math.pi
+        init = np.array([0.9 * two_pi], dtype=np.float32)
+        final = np.array([1.1 * two_pi], dtype=np.float32)
+        n1_abs, _ = extract_winding_numbers(final, final)
+        n1_rel, _ = extract_winding_numbers_relative(final, final, init, init)
+        assert n1_abs[0] == 1
+        assert n1_rel[0] == 0  # net: round(1.1) - round(0.9) = 1 - 1 = 0
+
+    def test_multiple_rotations_from_offset(self):
+        """init ≈ π, final ≈ 5π → absolute +2, relative +2."""
+        init = np.array([math.pi], dtype=np.float32)
+        final = np.array([5.0 * math.pi], dtype=np.float32)
+        n1_abs, _ = extract_winding_numbers(final, final)
+        n1_rel, _ = extract_winding_numbers_relative(final, final, init, init)
+        # absolute: round(5π / 2π) = round(2.5) = 2
+        assert n1_abs[0] == 2
+        # relative: round(2.5) - round(0.5) = 2 - 0 = 2
+        assert n1_rel[0] == 2
+
+    def test_negative_rotation(self):
+        """init=0, final ≈ -2π → relative -1."""
+        two_pi = np.float32(2.0 * math.pi)
+        init = np.array([0.0], dtype=np.float32)
+        final = np.array([-two_pi], dtype=np.float32)
+        n1_rel, _ = extract_winding_numbers_relative(final, final, init, init)
+        assert n1_rel[0] == -1
+
+    def test_both_axes_independent(self):
+        """Each axis computed independently."""
+        two_pi = 2.0 * math.pi
+        theta1_init = np.array([0.0], dtype=np.float32)
+        theta2_init = np.array([0.9 * two_pi], dtype=np.float32)
+        theta1_final = np.array([two_pi], dtype=np.float32)
+        theta2_final = np.array([1.1 * two_pi], dtype=np.float32)
+        n1, n2 = extract_winding_numbers_relative(
+            theta1_final, theta2_final, theta1_init, theta2_init,
+        )
+        assert n1[0] == 1   # round(1) - round(0) = 1
+        assert n2[0] == 0   # round(1.1) - round(0.9) = 1 - 1 = 0
+
+    def test_output_dtype(self):
+        z = np.array([0.0], dtype=np.float32)
+        n1, n2 = extract_winding_numbers_relative(z, z, z, z)
         assert n1.dtype == np.int32
         assert n2.dtype == np.int32
 

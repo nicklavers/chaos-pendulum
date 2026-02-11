@@ -54,10 +54,10 @@ class PhysicsParamsWidget(QWidget):
         layout.setContentsMargins(0, 0, 0, 0)
 
         self.m1_slider = make_slider(0.1, 5.0, 1.0)
-        self.m2_slider = make_slider(0.1, 5.0, 1.0)
+        self.m2_slider = make_slider(0.1, 5.0, 1.4)
         self.l1_slider = make_slider(0.1, 3.0, 1.0)
-        self.l2_slider = make_slider(0.1, 3.0, 1.0)
-        self.friction_slider = make_slider(0.0, 5.0, 0.0)
+        self.l2_slider = make_slider(0.1, 3.0, 0.3)
+        self.friction_slider = make_slider(0.0, 5.0, 0.38)
 
         self._add_row(layout, 0, "m\u2081", self.m1_slider, " kg")
         self._add_row(layout, 1, "m\u2082", self.m2_slider, " kg")

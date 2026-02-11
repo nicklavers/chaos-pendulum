@@ -25,11 +25,13 @@ from fractal.cache import FractalCache, CacheKey
 from fractal.compute import (
     FractalViewport, FractalTask,
     get_default_backend, get_progressive_levels, DEFAULT_N_SAMPLES,
+    build_initial_conditions,
 )
 from fractal.coloring import interpolate_angle
 from fractal._numpy_backend import rk4_single_trajectory
 from fractal.winding import (
-    extract_winding_numbers, get_single_winding_color, WINDING_COLORMAPS,
+    extract_winding_numbers_relative,
+    get_single_winding_color, WINDING_COLORMAPS,
 )
 from fractal.worker import FractalWorker
 from ui_common import LoadingOverlay
@@ -408,6 +410,34 @@ class FractalView(QWidget):
         for row_id, color_rgb in self.inspect_column.get_marker_colors().items():
             self.canvas.update_marker_color(row_id, color_rgb)
 
+    def _extract_winding_pair(
+        self,
+        theta1_final: float,
+        theta2_final: float,
+        theta1_init: float,
+        theta2_init: float,
+    ) -> tuple[int, int]:
+        """Extract relative winding number pair.
+
+        Computes net rotations from the initial position:
+        n = round(final / 2π) - round(init / 2π).
+
+        Args:
+            theta1_final: Final unwrapped theta1 angle.
+            theta2_final: Final unwrapped theta2 angle.
+            theta1_init: Initial theta1 angle.
+            theta2_init: Initial theta2 angle.
+
+        Returns:
+            (n1, n2) integer winding numbers.
+        """
+        t1_f = np.array([theta1_final], dtype=np.float32)
+        t2_f = np.array([theta2_final], dtype=np.float32)
+        t1_i = np.array([theta1_init], dtype=np.float32)
+        t2_i = np.array([theta2_init], dtype=np.float32)
+        n1_arr, n2_arr = extract_winding_numbers_relative(t1_f, t2_f, t1_i, t2_i)
+        return int(n1_arr[0]), int(n2_arr[0])
+
     def _display_basin(self, packed: np.ndarray) -> None:
         """Display the final-state winding number image with convergence shading.
 
@@ -419,7 +449,27 @@ class FractalView(QWidget):
         theta1_final = packed[:, 0].astype(np.float32)
         theta2_final = packed[:, 1].astype(np.float32)
         convergence_times = packed[:, 4].astype(np.float32)
-        self.canvas.display_basin_final(theta1_final, theta2_final, convergence_times)
+
+        # Reconstruct initial angle grid for relative winding.
+        # Use the data's own resolution (sqrt of N), not the canvas viewport's
+        # target resolution, since progressive levels arrive at lower resolutions.
+        data_res = int(np.sqrt(packed.shape[0]))
+        viewport = self.canvas.get_viewport()
+        data_viewport = FractalViewport(
+            center_theta1=viewport.center_theta1,
+            center_theta2=viewport.center_theta2,
+            span_theta1=viewport.span_theta1,
+            span_theta2=viewport.span_theta2,
+            resolution=data_res,
+        )
+        ics = build_initial_conditions(data_viewport)
+        theta1_init = ics[:, 0]
+        theta2_init = ics[:, 1]
+
+        self.canvas.display_basin_final(
+            theta1_final, theta2_final, convergence_times,
+            theta1_init=theta1_init, theta2_init=theta2_init,
+        )
 
     # -- Inspect tool: hover + click-to-pin --
 
@@ -458,13 +508,11 @@ class FractalView(QWidget):
         flat_idx = row * res + col
 
         # Extract winding numbers for this trajectory
-        theta1_final = float(final_state[flat_idx, 0])
-        theta2_final = float(final_state[flat_idx, 1])
-        n1_arr, n2_arr = extract_winding_numbers(
-            np.array([theta1_final], dtype=np.float32),
-            np.array([theta2_final], dtype=np.float32),
+        theta1_final_val = float(final_state[flat_idx, 0])
+        theta2_final_val = float(final_state[flat_idx, 1])
+        n1, n2 = self._extract_winding_pair(
+            theta1_final_val, theta2_final_val, theta1, theta2,
         )
-        n1, n2 = int(n1_arr[0]), int(n2_arr[0])
 
         # Get current winding colormap function
         colormap_name = self.canvas._winding_colormap_name
@@ -541,11 +589,9 @@ class FractalView(QWidget):
 
         # Extract winding numbers from the final state
         final_state = trajectory[-1]
-        n1_arr, n2_arr = extract_winding_numbers(
-            np.array([float(final_state[0])], dtype=np.float32),
-            np.array([float(final_state[1])], dtype=np.float32),
+        n1, n2 = self._extract_winding_pair(
+            float(final_state[0]), float(final_state[1]), theta1, theta2,
         )
-        n1, n2 = int(n1_arr[0]), int(n2_arr[0])
 
         # Look up basin color for the marker
         colormap_name = self.canvas.winding_colormap_name

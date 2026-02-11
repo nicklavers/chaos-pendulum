@@ -1,9 +1,9 @@
 """Winding number colormaps: map integer winding pairs (n1, n2) to BGRA color.
 
-Each damped trajectory settles to a final state. The winding number is
-the integer part of the total accumulated rotations:
+Each damped trajectory settles to a final state. The winding number counts
+net rotations relative to the initial position:
 
-    n = round(theta_final / (2 * pi))
+    n = round(theta_final / (2 * pi)) - round(theta_init / (2 * pi))
 
 The color domain is Z^2 — an infinite 2D integer lattice. Each colormap
 assigns a distinct color to each (n1, n2) pair, maximizing visual
@@ -49,6 +49,39 @@ def extract_winding_numbers(
     two_pi = 2.0 * math.pi
     n1 = np.round(theta1 / two_pi).astype(np.int32)
     n2 = np.round(theta2 / two_pi).astype(np.int32)
+    return n1, n2
+
+
+def extract_winding_numbers_relative(
+    theta1_final: np.ndarray,
+    theta2_final: np.ndarray,
+    theta1_init: np.ndarray,
+    theta2_init: np.ndarray,
+) -> tuple[np.ndarray, np.ndarray]:
+    """Extract relative winding numbers: net rotations from initial position.
+
+    Computes round(theta_final / 2π) - round(theta_init / 2π) for each axis,
+    so that initial conditions near a full-rotation boundary don't produce
+    off-by-one winding counts.
+
+    Args:
+        theta1_final: (N,) float array of final unwrapped theta1.
+        theta2_final: (N,) float array of final unwrapped theta2.
+        theta1_init: (N,) float array of initial theta1.
+        theta2_init: (N,) float array of initial theta2.
+
+    Returns:
+        (n1, n2): tuple of (N,) int32 arrays — net rotation counts.
+    """
+    two_pi = 2.0 * math.pi
+    n1 = (
+        np.round(theta1_final / two_pi).astype(np.int32)
+        - np.round(theta1_init / two_pi).astype(np.int32)
+    )
+    n2 = (
+        np.round(theta2_final / two_pi).astype(np.int32)
+        - np.round(theta2_init / two_pi).astype(np.int32)
+    )
     return n1, n2
 
 
@@ -197,26 +230,35 @@ def winding_to_argb(
     colormap_fn: Callable[[np.ndarray, np.ndarray], np.ndarray],
     resolution: int,
     convergence_times: np.ndarray | None = None,
+    theta1_init: np.ndarray | None = None,
+    theta2_init: np.ndarray | None = None,
 ) -> np.ndarray:
     """Map two unwrapped angle arrays to BGRA pixel array via winding colormaps.
 
-    Extracts winding numbers from the final unwrapped angles, applies the
-    colormap, and optionally modulates brightness by convergence time
-    (fast convergence = bright, slow = dark).
+    Uses relative winding numbers when initial angles are provided (the
+    standard path), falling back to absolute extraction otherwise (for
+    backward compatibility with tests).
 
     Args:
-        theta1: (N,) float array of unwrapped theta1 values.
-        theta2: (N,) float array of unwrapped theta2 values.
+        theta1: (N,) float array of final unwrapped theta1 values.
+        theta2: (N,) float array of final unwrapped theta2 values.
         colormap_fn: Function (n1_int32, n2_int32) -> (N, 4) uint8 BGRA.
         resolution: Grid side length (N = resolution^2).
         convergence_times: (N,) float32 array of convergence times.
             When provided, pixel brightness is modulated by how quickly
             each trajectory converged.
+        theta1_init: (N,) float array of initial theta1 values.
+        theta2_init: (N,) float array of initial theta2 values.
 
     Returns:
         (resolution, resolution, 4) uint8 BGRA array.
     """
-    n1, n2 = extract_winding_numbers(theta1, theta2)
+    if theta1_init is not None and theta2_init is not None:
+        n1, n2 = extract_winding_numbers_relative(
+            theta1, theta2, theta1_init, theta2_init,
+        )
+    else:
+        n1, n2 = extract_winding_numbers(theta1, theta2)
     pixels = colormap_fn(n1, n2)
 
     if convergence_times is not None:
