@@ -9,7 +9,6 @@ from simulation import DoublePendulumParams
 from fractal._numpy_backend import rk4_single_trajectory
 from fractal.winding import (
     get_single_winding_color,
-    winding_direction_brightness,
     winding_modular_grid,
     winding_basin_hash,
 )
@@ -109,7 +108,7 @@ class TestGetSingleWindingColor:
 
     def test_returns_tuple_of_four_ints(self):
         """Should return (b, g, r, a) tuple."""
-        result = get_single_winding_color(0, 0, winding_direction_brightness)
+        result = get_single_winding_color(0, 0, winding_modular_grid)
         assert isinstance(result, tuple)
         assert len(result) == 4
         assert all(isinstance(x, int) for x in result)
@@ -119,7 +118,7 @@ class TestGetSingleWindingColor:
         for n1 in range(-2, 3):
             for n2 in range(-2, 3):
                 b, g, r, a = get_single_winding_color(
-                    n1, n2, winding_direction_brightness,
+                    n1, n2, winding_modular_grid,
                 )
                 assert 0 <= b <= 255
                 assert 0 <= g <= 255
@@ -129,7 +128,6 @@ class TestGetSingleWindingColor:
     def test_alpha_is_255(self):
         """All winding colormaps should return full alpha."""
         for colormap_fn in [
-            winding_direction_brightness,
             winding_modular_grid,
             winding_basin_hash,
         ]:
@@ -143,7 +141,6 @@ class TestGetSingleWindingColor:
         n2_arr = np.array([n2], dtype=np.int32)
 
         for colormap_fn in [
-            winding_direction_brightness,
             winding_modular_grid,
             winding_basin_hash,
         ]:
@@ -153,15 +150,6 @@ class TestGetSingleWindingColor:
             assert single_bgra == expected, (
                 f"{colormap_fn.__name__}: {single_bgra} != {expected}"
             )
-
-    def test_origin_is_dark(self):
-        """Direction+brightness: origin (0,0) should be dark (low value)."""
-        b, g, r, _ = get_single_winding_color(
-            0, 0, winding_direction_brightness,
-        )
-        # Origin is gray with V=0.25 → roughly 64 in 0-255
-        brightness = 0.299 * r + 0.587 * g + 0.114 * b
-        assert brightness < 100, f"Expected dark, got brightness={brightness}"
 
     def test_different_pairs_different_colors(self):
         """Different winding pairs should produce different colors (usually)."""

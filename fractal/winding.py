@@ -9,12 +9,15 @@ The color domain is Z^2 — an infinite 2D integer lattice. Each colormap
 assigns a distinct color to each (n1, n2) pair, maximizing visual
 discrimination between adjacent basins.
 
-Three colormaps are provided:
-  - Direction + Brightness: polar mapping (atan2 for hue, distance for value)
+Two colormaps are provided:
   - Modular Grid (5x5): repeating 25-color palette via modular arithmetic
   - Basin Hash: golden-ratio hash for pseudo-random RGB
 
 All functions take (n1, n2) int32 arrays and return (N, 4) uint8 BGRA.
+
+Brightness modulation: when convergence times are provided, pixel brightness
+is scaled so that fast-converging trajectories (basin interiors) are bright
+and slow-converging ones (basin boundaries) are dark.
 """
 
 from __future__ import annotations
@@ -52,46 +55,6 @@ def extract_winding_numbers(
 # ---------------------------------------------------------------------------
 # Colormap functions: (n1, n2) int32 arrays -> (N, 4) uint8 BGRA
 # ---------------------------------------------------------------------------
-
-def winding_direction_brightness(
-    n1: np.ndarray, n2: np.ndarray,
-) -> np.ndarray:
-    """Polar mapping: hue from atan2(n2, n1), value from distance.
-
-    The origin (0, 0) is dark gray. Hue encodes the direction of
-    the winding vector; brightness increases with distance from the
-    origin, saturating at distance 5.
-
-    Args:
-        n1: (N,) int32 array of theta1 winding numbers.
-        n2: (N,) int32 array of theta2 winding numbers.
-
-    Returns:
-        (N, 4) uint8 BGRA array.
-    """
-    n = n1.shape[0]
-    n1f = n1.astype(np.float32)
-    n2f = n2.astype(np.float32)
-
-    # Distance from origin (capped at 5 for brightness scaling)
-    dist = np.sqrt(n1f * n1f + n2f * n2f)
-    max_dist = np.float32(5.0)
-
-    # Direction: atan2 mapped to [0, 360) for hue
-    angle = np.arctan2(n2f, n1f)
-    h = (angle % (2.0 * np.float32(math.pi))) / (2.0 * np.float32(math.pi)) * 360.0
-
-    # At origin, use gray (low saturation, low value)
-    at_origin = (n1 == 0) & (n2 == 0)
-    s = np.where(at_origin, np.float32(0.0), np.float32(0.85))
-    v = np.where(
-        at_origin,
-        np.float32(0.25),
-        np.float32(0.3) + np.float32(0.7) * np.minimum(dist / max_dist, np.float32(1.0)),
-    )
-
-    return _hsv_to_bgra(h, s, v)
-
 
 # 5x5 modular grid palette (25 visually distinct colors, BGRA)
 _MODULAR_PALETTE = np.array([
@@ -193,7 +156,6 @@ def winding_basin_hash(
 # ---------------------------------------------------------------------------
 
 WINDING_COLORMAPS: dict[str, Callable[[np.ndarray, np.ndarray], np.ndarray]] = {
-    "Direction + Brightness": winding_direction_brightness,
     "Modular Grid (5\u00d75)": winding_modular_grid,
     "Basin Hash": winding_basin_hash,
 }
@@ -234,24 +196,69 @@ def winding_to_argb(
     theta2: np.ndarray,
     colormap_fn: Callable[[np.ndarray, np.ndarray], np.ndarray],
     resolution: int,
+    convergence_times: np.ndarray | None = None,
 ) -> np.ndarray:
     """Map two unwrapped angle arrays to BGRA pixel array via winding colormaps.
 
     Extracts winding numbers from the final unwrapped angles, applies the
-    colormap, and reshapes to a 2D image.
+    colormap, and optionally modulates brightness by convergence time
+    (fast convergence = bright, slow = dark).
 
     Args:
         theta1: (N,) float array of unwrapped theta1 values.
         theta2: (N,) float array of unwrapped theta2 values.
         colormap_fn: Function (n1_int32, n2_int32) -> (N, 4) uint8 BGRA.
         resolution: Grid side length (N = resolution^2).
+        convergence_times: (N,) float32 array of convergence times.
+            When provided, pixel brightness is modulated by how quickly
+            each trajectory converged.
 
     Returns:
         (resolution, resolution, 4) uint8 BGRA array.
     """
     n1, n2 = extract_winding_numbers(theta1, theta2)
     pixels = colormap_fn(n1, n2)
+
+    if convergence_times is not None:
+        pixels = _apply_brightness_modulation(pixels, convergence_times)
+
     return pixels.reshape(resolution, resolution, 4)
+
+
+def _apply_brightness_modulation(
+    pixels: np.ndarray,
+    convergence_times: np.ndarray,
+) -> np.ndarray:
+    """Scale pixel brightness by normalized convergence time.
+
+    Fast-converging trajectories (basin interiors) are bright; slow-converging
+    ones (basin boundaries) are dark. Brightness ranges from 0.3 to 1.0.
+
+    Args:
+        pixels: (N, 4) uint8 BGRA array (will be copied, not mutated).
+        convergence_times: (N,) float32 convergence times.
+
+    Returns:
+        (N, 4) uint8 BGRA array with brightness-modulated BGR channels.
+    """
+    t_min = convergence_times.min()
+    t_max = convergence_times.max()
+
+    if t_max <= t_min:
+        # All same convergence time — no modulation
+        return pixels
+
+    # Normalize to [0, 1]: 0 = fastest, 1 = slowest
+    normalized = (convergence_times - t_min) / (t_max - t_min)
+
+    # Fast = bright: fast → 1.0, slow → 0.3
+    brightness = np.float32(1.0) - np.float32(0.7) * normalized
+
+    # Apply to B, G, R channels (indices 0, 1, 2); leave A (index 3) alone
+    result = pixels.copy()
+    bgr = result[:, :3].astype(np.float32) * brightness[:, np.newaxis]
+    result[:, :3] = bgr.astype(np.uint8)
+    return result
 
 
 # ---------------------------------------------------------------------------

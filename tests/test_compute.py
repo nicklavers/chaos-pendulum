@@ -174,20 +174,25 @@ class TestBasinResult:
     def test_field_access(self):
         """Should provide named field access."""
         state = np.zeros((16, 4), dtype=np.float32)
-        result = BasinResult(state)
+        conv = np.zeros(16, dtype=np.float32)
+        result = BasinResult(state, conv)
         assert result.final_state is state
+        assert result.convergence_times is conv
 
     def test_tuple_unpacking(self):
         """Should support tuple unpacking."""
         state = np.ones((16, 4), dtype=np.float32)
-        result = BasinResult(state)
-        (s,) = result
+        conv = np.full(16, 5.0, dtype=np.float32)
+        result = BasinResult(state, conv)
+        s, c = result
         assert np.array_equal(s, state)
+        assert np.array_equal(c, conv)
 
     def test_immutable(self):
         """NamedTuple fields should be read-only."""
         state = np.zeros((16, 4), dtype=np.float32)
-        result = BasinResult(state)
+        conv = np.zeros(16, dtype=np.float32)
+        result = BasinResult(state, conv)
         with pytest.raises(AttributeError):
             result.final_state = np.zeros((16, 4), dtype=np.float32)
 

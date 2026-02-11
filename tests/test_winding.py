@@ -7,7 +7,6 @@ import pytest
 
 from fractal.winding import (
     extract_winding_numbers,
-    winding_direction_brightness,
     winding_modular_grid,
     winding_basin_hash,
     winding_to_argb,
@@ -83,7 +82,6 @@ class TestWindingColormapOutputShape:
     """All colormap functions should return (N, 4) uint8 BGRA."""
 
     @pytest.mark.parametrize("colormap_fn", [
-        winding_direction_brightness,
         winding_modular_grid,
         winding_basin_hash,
     ])
@@ -95,7 +93,6 @@ class TestWindingColormapOutputShape:
         assert result.dtype == np.uint8
 
     @pytest.mark.parametrize("colormap_fn", [
-        winding_direction_brightness,
         winding_modular_grid,
         winding_basin_hash,
     ])
@@ -111,7 +108,6 @@ class TestWindingColormapDiscrimination:
     """Different winding pairs should map to different colors."""
 
     @pytest.mark.parametrize("colormap_fn", [
-        winding_direction_brightness,
         winding_modular_grid,
         winding_basin_hash,
     ])
@@ -134,7 +130,7 @@ class TestWindingToArgb:
         theta1 = np.zeros(16, dtype=np.float32)
         theta2 = np.zeros(16, dtype=np.float32)
         result = winding_to_argb(
-            theta1, theta2, winding_direction_brightness, 4,
+            theta1, theta2, winding_modular_grid, 4,
         )
         assert result.shape == (4, 4, 4)
         assert result.dtype == np.uint8
@@ -146,7 +142,7 @@ class TestWindingToArgb:
         theta1 = np.array([0.0, two_pi, 0.0, two_pi], dtype=np.float32)
         theta2 = np.array([0.0, 0.0, two_pi, two_pi], dtype=np.float32)
         result = winding_to_argb(
-            theta1, theta2, winding_direction_brightness, 2,
+            theta1, theta2, winding_modular_grid, 2,
         )
         # Flatten to check uniqueness
         pixels = result.reshape(-1, 4)
@@ -159,7 +155,7 @@ class TestBuildWindingLegend:
 
     def test_output_shape(self):
         """Legend should be a square BGRA image."""
-        legend = build_winding_legend(winding_direction_brightness, n_range=3, cell_size=6)
+        legend = build_winding_legend(winding_modular_grid, n_range=3, cell_size=6)
         expected_px = 7 * 6  # (2*3+1) * 6 = 42
         assert legend.shape == (expected_px, expected_px, 4)
         assert legend.dtype == np.uint8
@@ -179,8 +175,8 @@ class TestBuildWindingLegend:
 class TestWindingColormapRegistry:
     """Test the WINDING_COLORMAPS registry."""
 
-    def test_registry_has_three_entries(self):
-        assert len(WINDING_COLORMAPS) == 3
+    def test_registry_has_two_entries(self):
+        assert len(WINDING_COLORMAPS) == 2
 
     def test_all_entries_callable(self):
         for name, fn in WINDING_COLORMAPS.items():
@@ -188,7 +184,6 @@ class TestWindingColormapRegistry:
 
     def test_expected_names(self):
         expected = {
-            "Direction + Brightness",
             "Modular Grid (5\u00d75)",
             "Basin Hash",
         }
@@ -202,3 +197,80 @@ class TestWindingColormapRegistry:
         result = fn(n1, n2)
         assert result.shape == (3, 4)
         assert result.dtype == np.uint8
+
+
+class TestBrightnessModulation:
+    """Test convergence-time brightness modulation in winding_to_argb."""
+
+    def test_varying_times_produce_varying_brightness(self):
+        """Pixels with different convergence times should differ in brightness."""
+        two_pi = np.float32(2.0 * math.pi)
+        # 4 pixels, all same winding (0, 0) but different convergence times
+        theta1 = np.zeros(4, dtype=np.float32)
+        theta2 = np.zeros(4, dtype=np.float32)
+        conv_times = np.array([1.0, 5.0, 10.0, 20.0], dtype=np.float32)
+
+        result = winding_to_argb(
+            theta1, theta2, winding_modular_grid, 2,
+            convergence_times=conv_times,
+        )
+        pixels = result.reshape(-1, 4)
+        # Fast pixel (idx 0) should be brighter than slow pixel (idx 3)
+        fast_brightness = int(pixels[0, 0]) + int(pixels[0, 1]) + int(pixels[0, 2])
+        slow_brightness = int(pixels[3, 0]) + int(pixels[3, 1]) + int(pixels[3, 2])
+        assert fast_brightness > slow_brightness
+
+    def test_uniform_times_no_modulation(self):
+        """When all convergence times are equal, no brightness change."""
+        theta1 = np.zeros(4, dtype=np.float32)
+        theta2 = np.zeros(4, dtype=np.float32)
+        conv_times = np.full(4, 5.0, dtype=np.float32)
+
+        result_with = winding_to_argb(
+            theta1, theta2, winding_modular_grid, 2,
+            convergence_times=conv_times,
+        )
+        result_without = winding_to_argb(
+            theta1, theta2, winding_modular_grid, 2,
+        )
+        np.testing.assert_array_equal(result_with, result_without)
+
+    def test_none_convergence_times_no_modulation(self):
+        """Passing None for convergence_times behaves like no modulation."""
+        theta1 = np.zeros(4, dtype=np.float32)
+        theta2 = np.zeros(4, dtype=np.float32)
+
+        result_none = winding_to_argb(
+            theta1, theta2, winding_modular_grid, 2,
+            convergence_times=None,
+        )
+        result_default = winding_to_argb(
+            theta1, theta2, winding_modular_grid, 2,
+        )
+        np.testing.assert_array_equal(result_none, result_default)
+
+    def test_output_shape_preserved(self):
+        """Brightness modulation should not change output shape."""
+        theta1 = np.zeros(16, dtype=np.float32)
+        theta2 = np.zeros(16, dtype=np.float32)
+        conv_times = np.linspace(1.0, 10.0, 16, dtype=np.float32)
+
+        result = winding_to_argb(
+            theta1, theta2, winding_modular_grid, 4,
+            convergence_times=conv_times,
+        )
+        assert result.shape == (4, 4, 4)
+        assert result.dtype == np.uint8
+
+    def test_alpha_channel_unchanged(self):
+        """Alpha channel should remain 255 after brightness modulation."""
+        theta1 = np.zeros(4, dtype=np.float32)
+        theta2 = np.zeros(4, dtype=np.float32)
+        conv_times = np.array([1.0, 5.0, 10.0, 20.0], dtype=np.float32)
+
+        result = winding_to_argb(
+            theta1, theta2, winding_modular_grid, 2,
+            convergence_times=conv_times,
+        )
+        pixels = result.reshape(-1, 4)
+        np.testing.assert_array_equal(pixels[:, 3], 255)

@@ -39,6 +39,9 @@ class FractalControls(QWidget):
         self._init_ui()
         self._building = False
 
+        # Apply default display mode (basin) UI state
+        self._apply_display_mode("basin")
+
     def _init_ui(self):
         main_layout = QVBoxLayout(self)
         main_layout.setContentsMargins(8, 8, 8, 8)
@@ -129,9 +132,9 @@ class FractalControls(QWidget):
         mode_row = QHBoxLayout()
         self._angle_mode_btn = QPushButton("Angle")
         self._angle_mode_btn.setCheckable(True)
-        self._angle_mode_btn.setChecked(True)
         self._basin_mode_btn = QPushButton("Basin")
         self._basin_mode_btn.setCheckable(True)
+        self._basin_mode_btn.setChecked(True)
 
         self._display_mode_group = QButtonGroup(self)
         self._display_mode_group.setExclusive(True)
@@ -148,29 +151,26 @@ class FractalControls(QWidget):
 
         display_layout.addWidget(QLabel("Colormap:"), 1, 0)
         self.colormap_combo = QComboBox()
-        # Initially populated with torus colormaps (matching default "Both" angle)
+        # Placeholder; _apply_display_mode() repopulates for the active mode
         for name in TORUS_COLORMAPS:
             self.colormap_combo.addItem(name)
-        ybgm_idx = self.colormap_combo.findText("RGB Aligned + YBGM")
-        if ybgm_idx >= 0:
-            self.colormap_combo.setCurrentIndex(ybgm_idx)
         display_layout.addWidget(self.colormap_combo, 1, 1)
 
+        display_layout.addWidget(QLabel("Resolution:"), 2, 0)
+        self.resolution_combo = QComboBox()
+        for res in [64, 128, 256, 512]:
+            self.resolution_combo.addItem(f"{res}x{res}", res)
+        self.resolution_combo.setCurrentIndex(2)  # default 256x256
+        display_layout.addWidget(self.resolution_combo, 2, 1)
+
         self._angle_label = QLabel("Display angle:")
-        display_layout.addWidget(self._angle_label, 2, 0)
+        display_layout.addWidget(self._angle_label, 3, 0)
         self.angle_combo = QComboBox()
         self.angle_combo.addItem("\u03b8\u2082 (bob 2)", 1)
         self.angle_combo.addItem("\u03b8\u2081 (bob 1)", 0)
         self.angle_combo.addItem("Both (\u03b8\u2081, \u03b8\u2082)", 2)
         self.angle_combo.setCurrentIndex(2)  # default: Both
-        display_layout.addWidget(self.angle_combo, 2, 1)
-
-        display_layout.addWidget(QLabel("Resolution:"), 4, 0)
-        self.resolution_combo = QComboBox()
-        for res in [64, 128, 256, 512]:
-            self.resolution_combo.addItem(f"{res}x{res}", res)
-        self.resolution_combo.setCurrentIndex(2)  # default 256x256
-        display_layout.addWidget(self.resolution_combo, 4, 1)
+        display_layout.addWidget(self.angle_combo, 3, 1)
 
         main_layout.addWidget(display_group)
 
@@ -378,12 +378,12 @@ class FractalControls(QWidget):
             self._time_group.setVisible(False)
             # Hide simulation group (t_end auto-computed)
             self._sim_group.setVisible(False)
-            # Disable angle combo (irrelevant in basin mode)
-            self.angle_combo.setEnabled(False)
-            self._angle_label.setEnabled(False)
-            # Auto-set friction to 0.5 if currently zero
+            # Hide angle combo (irrelevant in basin mode)
+            self.angle_combo.setVisible(False)
+            self._angle_label.setVisible(False)
+            # Auto-set friction to 0.3 if currently zero
             if self.get_friction() < 0.01:
-                self.set_friction(0.5)
+                self.set_friction(0.3)
             # Swap colormap dropdown to winding colormaps
             current_text = self.colormap_combo.currentText()
             self.colormap_combo.clear()
@@ -396,9 +396,9 @@ class FractalControls(QWidget):
             # Show time group and simulation group
             self._time_group.setVisible(True)
             self._sim_group.setVisible(True)
-            # Enable angle combo
-            self.angle_combo.setEnabled(True)
-            self._angle_label.setEnabled(True)
+            # Show angle combo
+            self.angle_combo.setVisible(True)
+            self._angle_label.setVisible(True)
             # Swap colormap dropdown back based on angle selection
             self._update_colormap_options(self.angle_combo.currentData())
 

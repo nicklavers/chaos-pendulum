@@ -150,10 +150,8 @@ class AppWindow(QMainWindow):
             # Pendulum -> Fractal
             self.pendulum_view.deactivate()
             params = self.pendulum_view.get_params()
-            theta1 = self.pendulum_view.get_initial_theta1()
-            theta2 = self.pendulum_view.get_initial_theta2()
             self.stack.setCurrentIndex(self.FRACTAL_MODE)
-            self.fractal_view.activate(params, theta1, theta2)
+            self.fractal_view.activate(params)
 
         elif current == self.FRACTAL_MODE and mode == self.PENDULUM_MODE:
             # Fractal -> Pendulum

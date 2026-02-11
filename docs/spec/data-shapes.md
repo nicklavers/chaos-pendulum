@@ -71,12 +71,14 @@ Immutable result from angle-mode batch simulation. Supports tuple unpacking:
 
 ```python
 class BasinResult(NamedTuple):
-    final_state: np.ndarray  # (N, 4) float32 [theta1, theta2, omega1, omega2]
+    final_state: np.ndarray       # (N, 4) float32 [theta1, theta2, omega1, omega2]
+    convergence_times: np.ndarray  # (N,) float32 — time to cross energy threshold
 ```
 
-Immutable result from basin-mode DOP853 simulation. Stores only the final state
-of each trajectory (no intermediate snapshots). Supports tuple unpacking:
-`(final_state,) = result`.
+Immutable result from basin-mode simulation. Stores the final state of each
+trajectory and the time at which it converged (crossed the saddle-energy
+threshold). If no energy threshold is set, `convergence_times` values equal
+`t_end`. Supports tuple unpacking: `final_state, conv_times = result`.
 
 ### `CacheKey` (fractal/cache.py)
 
@@ -168,7 +170,7 @@ to functions with signature `(theta1: ndarray, theta2: ndarray) -> (N, 4) uint8`
 
 | Signal | Source | Payload |
 |--------|--------|---------|
-| `level_complete` | `FractalWorker` | `(int, np.ndarray, np.ndarray\|None)` — resolution, data, final_velocities. Angle mode: data is snapshots `(N, 2, n_samples)`, final_velocities `(N, 2)`. Basin mode: data is final_state `(N, 4)`, final_velocities is `None`. |
+| `level_complete` | `FractalWorker` | `(int, np.ndarray, np.ndarray)` — resolution, data, extra. Angle mode: data is snapshots `(N, 2, n_samples)`, extra is final_velocities `(N, 2)`. Basin mode: data is final_state `(N, 4)`, extra is convergence_times `(N,)`. |
 | `progress` | `FractalWorker` | `(int, int)` — steps_done, total_steps |
 | `viewport_changed` | `FractalCanvas` | `FractalViewport` |
 | `ic_selected` | `FractalCanvas` | `(float, float)` — theta1, theta2 (Ctrl+click) |
@@ -185,6 +187,8 @@ to functions with signature `(theta1: ndarray, theta2: ndarray) -> (N, 4) uint8`
 | `trajectory_pinned` | `FractalCanvas` | `(str, float, float)` — row_id, theta1, theta2 (inspect click) |
 | `row_removed` | `InspectColumn` | `str` — row_id of removed trajectory |
 | `all_cleared` | `InspectColumn` | (no payload) |
+| `indicator_hovered` | `InspectColumn` | `str` — row_id of hovered indicator |
+| `indicator_unhovered` | `InspectColumn` | `str` — row_id of unhovered indicator |
 
 ### Winding Number Arrays — `(N,)` int32
 

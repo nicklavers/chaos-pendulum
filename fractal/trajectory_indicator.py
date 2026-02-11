@@ -33,6 +33,8 @@ class TrajectoryIndicator(QWidget):
 
     clicked = pyqtSignal(str)
     remove_clicked = pyqtSignal(str)
+    hovered = pyqtSignal(str)
+    unhovered = pyqtSignal(str)
 
     def __init__(
         self,
@@ -208,11 +210,13 @@ class TrajectoryIndicator(QWidget):
         """Mouse entered: show hover effects."""
         self._hovered = True
         self.update()
+        self.hovered.emit(self._row_id)
 
     def leaveEvent(self, event) -> None:
         """Mouse left: hide hover effects."""
         self._hovered = False
         self.update()
+        self.unhovered.emit(self._row_id)
 
     def _init_ui(self) -> None:
         """Set fixed width and minimum height."""

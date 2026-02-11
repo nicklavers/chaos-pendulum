@@ -162,28 +162,36 @@ at half-pi points.
 
 ## Winding Number Path (basin mode)
 
-File: `fractal/winding.py` (~273 lines).
+File: `fractal/winding.py` (~230 lines).
 
-Used in basin mode. The basin solver (`fractal/basin_solver.py`) returns
-`BasinResult(final_state: (N, 4))` — only the final state of each trajectory.
-The view extracts theta1/theta2 columns and passes them to the canvas, which
-maps final unwrapped angles to integer winding numbers, then to BGRA pixels.
+Used in basin mode. The RK4 backends return
+`BasinResult(final_state: (N, 4), convergence_times: (N,))` — the final state
+and convergence time of each trajectory. The view extracts theta1/theta2
+columns and convergence_times, then passes them to the canvas, which maps
+final unwrapped angles to integer winding numbers, applies an optional
+brightness modulation based on convergence time, then reshapes to BGRA pixels.
 
 ```
 BasinResult.final_state[:, 0]   (N,) theta1 final
 BasinResult.final_state[:, 1]   (N,) theta2 final
-    |                              |
-    v                              v
-extract_winding_numbers()
-    |                    |
-    v                    v
-n1 (N,) int32        n2 (N,) int32      round(theta / 2pi)
-    \                  /
-     v                v
-colormap_fn(n1, n2)
-    |
+BasinResult.convergence_times   (N,) float32 seconds
+    |                              |              |
+    v                              v              |
+extract_winding_numbers()                         |
+    |                    |                        |
+    v                    v                        |
+n1 (N,) int32        n2 (N,) int32                |
+    \                  /                          |
+     v                v                           |
+colormap_fn(n1, n2)                               |
+    |                                             |
+    v                                             |
+(N, 4) uint8 BGRA                                |
+    |                                             v
+    +-- _apply_brightness_modulation(pixels, conv_times, invert)
+    |       normalize times to [0,1], scale BGR by [0.3, 1.0]
     v
-(N, 4) uint8 BGRA
+(N, 4) uint8 BGRA (brightness-modulated)
     |
     v
 reshape to (resolution, resolution, 4)
@@ -198,9 +206,19 @@ QImage
 
 Rounds each unwrapped angle to the nearest integer multiple of 2pi.
 
-#### `winding_to_argb(theta1, theta2, colormap_fn, resolution) -> (res, res, 4) uint8`
+#### `winding_to_argb(theta1, theta2, colormap_fn, resolution, convergence_times=None) -> (res, res, 4) uint8`
 
-Full pipeline: extract winding numbers, apply colormap, reshape to grid.
+Full pipeline: extract winding numbers, apply colormap, optionally modulate
+brightness by convergence time, reshape to grid. When `convergence_times` is
+provided and values are non-uniform, pixel brightness is scaled to the range
+[0.3, 1.0] — fast convergence is bright (basin interiors), slow convergence
+is dark (basin boundaries).
+
+#### `_apply_brightness_modulation(pixels, convergence_times) -> (N, 4) uint8`
+
+Internal helper. Normalizes convergence times to [0, 1], computes a per-pixel
+brightness factor in [0.3, 1.0], and multiplies BGR channels. Alpha is
+unchanged. Returns a new array (immutable pattern).
 
 #### `build_winding_legend(colormap_fn, n_range, cell_size) -> ndarray`
 
@@ -214,7 +232,6 @@ All functions have signature `(n1: ndarray[int32], n2: ndarray[int32]) -> (N, 4)
 
 | Name | Description |
 |------|-------------|
-| Direction + Brightness | Hue from atan2(n1,n2), brightness from distance to origin |
 | Modular Grid (5x5) | 5x5 repeating color grid, each cell a distinct hue |
 | Basin Hash | Hash-based coloring for maximum adjacent-basin contrast |
 
@@ -226,5 +243,6 @@ QImage rebuild (~5ms) = **< 10ms** (60fps capable).
 Bivariate: interpolation x2 (<0.2ms) + colormap function (~3-5ms) +
 QImage rebuild (~5ms) = **< 10ms** (60fps capable, verified by benchmark tests).
 
-Winding: extraction (<0.1ms) + colormap (<1ms) + QImage rebuild (~5ms) =
-**< 10ms**. No time interpolation needed (basin mode displays final state only).
+Winding: extraction (<0.1ms) + colormap (<1ms) + brightness modulation (<0.5ms)
+\+ QImage rebuild (~5ms) = **< 10ms**. No time interpolation needed (basin mode
+displays final state only).

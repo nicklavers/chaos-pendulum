@@ -43,12 +43,30 @@ class TestOutputShape:
         assert result.final_state.shape == (16, 4)
         assert result.final_state.dtype == np.float32
 
+    def test_convergence_times_shape(self):
+        backend = NumpyBackend()
+        params = DoublePendulumParams(friction=1.0)
+        ics = _small_grid(4)
+        result = backend.simulate_basin_batch(params, ics, t_end=1.0, dt=0.01)
+        assert result.convergence_times.shape == (16,)
+        assert result.convergence_times.dtype == np.float32
+
+    def test_convergence_times_bounded_by_t_end(self):
+        backend = NumpyBackend()
+        params = DoublePendulumParams(friction=1.0)
+        ics = _small_grid(4)
+        t_end = 5.0
+        result = backend.simulate_basin_batch(params, ics, t_end=t_end, dt=0.01)
+        assert np.all(result.convergence_times <= t_end + 0.01)
+        assert np.all(result.convergence_times >= 0.0)
+
     def test_single_trajectory(self):
         backend = NumpyBackend()
         params = DoublePendulumParams(friction=1.0)
         ics = np.array([[0.1, 0.2, 0.0, 0.0]], dtype=np.float32)
         result = backend.simulate_basin_batch(params, ics, t_end=1.0, dt=0.01)
         assert result.final_state.shape == (1, 4)
+        assert result.convergence_times.shape == (1,)
 
 
 class TestWindingNumberAccuracy:
@@ -106,6 +124,9 @@ class TestEnergyTermination:
         n1, n2 = extract_winding_numbers(theta1_final, theta2_final)
         assert n1[0] == 0
         assert n2[0] == 0
+
+        # Convergence time should be less than t_end (early termination)
+        assert result.convergence_times[0] < 100.0
 
     def test_no_saddle_energy_still_works(self):
         """Without saddle_energy_val, should integrate to t_end."""

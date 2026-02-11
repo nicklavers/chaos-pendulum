@@ -353,7 +353,8 @@ def rk4_basin_final_state(
             energy drops below this threshold.
 
     Returns:
-        BasinResult with final_state (N, 4) float32.
+        BasinResult with final_state (N, 4) float32 and
+        convergence_times (N,) float32.
     """
     n_steps = int(t_end / dt)
     n_trajectories = initial_conditions.shape[0]
@@ -363,6 +364,9 @@ def rk4_basin_final_state(
     # Freeze tracking for early termination
     frozen = np.zeros(n_trajectories, dtype=bool)
     all_frozen = False
+
+    # Convergence time: default to t_end (ran to completion)
+    convergence_times = np.full(n_trajectories, t_end, dtype=np.float32)
 
     for step in range(n_steps):
         # Cancellation check every 100 steps (~1s response time)
@@ -401,6 +405,7 @@ def rk4_basin_final_state(
             energies = total_energy_batch(states, params)
             newly_frozen = (~frozen) & (energies < saddle_energy_val)
             if np.any(newly_frozen):
+                convergence_times[newly_frozen] = np.float32(step * dt)
                 frozen = frozen | newly_frozen
                 all_frozen = bool(np.all(frozen))
 
@@ -408,4 +413,4 @@ def rk4_basin_final_state(
     if progress_callback is not None:
         progress_callback(n_steps, n_steps)
 
-    return BasinResult(states.astype(np.float32))
+    return BasinResult(states.astype(np.float32), convergence_times)

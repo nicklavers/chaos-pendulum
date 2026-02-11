@@ -18,7 +18,6 @@ from fractal.animated_diagram import TrajectoryInfo, PAUSE_FRAMES
 from fractal.inspect_column import PinnedTrajectory, FRAME_SUBSAMPLE
 from fractal.winding import (
     get_single_winding_color,
-    winding_direction_brightness,
     winding_modular_grid,
     WINDING_COLORMAPS,
 )
@@ -181,7 +180,7 @@ class TestBasinColorLookup:
 
     def test_bgra_to_rgb_conversion(self):
         """get_single_winding_color returns BGRA; we need RGB for bob colors."""
-        b, g, r, a = get_single_winding_color(1, 0, winding_direction_brightness)
+        b, g, r, a = get_single_winding_color(1, 0, winding_modular_grid)
         # All values should be in valid range
         assert 0 <= r <= 255
         assert 0 <= g <= 255
@@ -196,7 +195,7 @@ class TestBasinColorLookup:
         for n1 in range(-2, 3):
             for n2 in range(-2, 3):
                 b, g, r, _ = get_single_winding_color(
-                    n1, n2, winding_direction_brightness,
+                    n1, n2, winding_modular_grid,
                 )
                 colors.add((r, g, b))
         # Should have multiple distinct colors

@@ -175,11 +175,13 @@ def _rk4_basin_numba(
 ):
     """Numba-compiled parallel RK4 for basin mode (final state only).
 
-    Returns final_state (N, 4) float32.
+    Returns (final_state (N, 4) float32, convergence_times (N,) float32).
     No intermediate snapshots are stored.
     """
     n_traj = initial_conditions.shape[0]
     final_state = np.zeros((n_traj, 4), dtype=np.float32)
+    t_end_f32 = np.float32(n_steps * dt)
+    convergence_times = np.full(n_traj, t_end_f32, dtype=np.float32)
     check_energy = saddle_energy_val < np.inf
     energy_check_interval = 50
 
@@ -228,6 +230,7 @@ def _rk4_basin_numba(
                     m1, m2, l1, l2, g,
                 )
                 if energy < saddle_energy_val:
+                    convergence_times[i] = np.float32(step * dt)
                     break
 
         final_state[i, 0] = np.float32(theta1)
@@ -235,7 +238,7 @@ def _rk4_basin_numba(
         final_state[i, 2] = np.float32(omega1)
         final_state[i, 3] = np.float32(omega2)
 
-    return final_state
+    return final_state, convergence_times
 
 
 class NumbaBackend:
@@ -299,7 +302,7 @@ class NumbaBackend:
         ics = initial_conditions.astype(np.float64)
         se = np.inf if saddle_energy_val is None else float(saddle_energy_val)
 
-        final_state = _rk4_basin_numba(
+        final_state, convergence_times = _rk4_basin_numba(
             ics,
             params.m1, params.m2, params.l1, params.l2, params.g,
             params.friction,
@@ -309,7 +312,7 @@ class NumbaBackend:
         if progress_callback is not None:
             progress_callback(n_steps, n_steps)
 
-        return BasinResult(final_state)
+        return BasinResult(final_state, convergence_times)
 
     @staticmethod
     def warmup() -> None:

@@ -93,7 +93,7 @@ class FractalWorker(QThread):
                     if self._cancelled:
                         return
                     self.level_complete.emit(
-                        level_res, result.final_state, None,
+                        level_res, result.final_state, result.convergence_times,
                     )
                 else:
                     result = self._backend.simulate_batch(

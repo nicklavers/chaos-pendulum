@@ -11,6 +11,7 @@ This is the main coordinator for fractal mode. It:
 from __future__ import annotations
 
 import logging
+import math
 
 import numpy as np
 from PyQt6.QtCore import Qt
@@ -27,7 +28,9 @@ from fractal.compute import (
 )
 from fractal.coloring import interpolate_angle
 from fractal._numpy_backend import rk4_single_trajectory
-from fractal.winding import extract_winding_numbers, WINDING_COLORMAPS
+from fractal.winding import (
+    extract_winding_numbers, get_single_winding_color, WINDING_COLORMAPS,
+)
 from fractal.worker import FractalWorker
 from ui_common import LoadingOverlay
 
@@ -85,8 +88,10 @@ class FractalView(QWidget):
         self._retiring_workers: list[FractalWorker] = []
         self._current_params: DoublePendulumParams | None = None
 
-        # Basin display mode
-        self._basin_mode = False
+        # Basin display mode — sync with controls default
+        self._basin_mode = self.controls.get_display_mode() == "basin"
+        self.canvas.set_basin_mode(self._basin_mode)
+        self.inspect_column.set_basin_mode(self._basin_mode)
         self._current_final_velocities: np.ndarray | None = None
 
         # Cached final state for basin-mode hover lookup
@@ -114,19 +119,26 @@ class FractalView(QWidget):
         self.canvas.trajectory_pinned.connect(self._on_trajectory_pinned)
         self.inspect_column.row_removed.connect(self.canvas.remove_marker)
         self.inspect_column.all_cleared.connect(self.canvas.clear_markers)
+        self.inspect_column.indicator_hovered.connect(self.canvas.highlight_marker)
+        self.inspect_column.indicator_unhovered.connect(
+            lambda _row_id: self.canvas.unhighlight_marker(),
+        )
 
     # -- Public interface for mode switching --
 
     def activate(
         self,
         params: DoublePendulumParams | None = None,
-        center_theta1: float = 0.0,
-        center_theta2: float = 0.0,
+        center_theta1: float = math.pi,
+        center_theta2: float = math.pi,
     ) -> None:
         """Called when switching to fractal mode."""
         if params is not None:
             self.controls.set_params(params)
-            self._current_params = params
+            # Basin mode requires friction > 0; re-enforce after param override
+            if self._basin_mode and self.controls.get_friction() < 0.01:
+                self.controls.set_friction(0.3)
+            self._current_params = self.controls.get_params()
 
         self.canvas.set_viewport(center_theta1, center_theta2)
 
@@ -240,12 +252,13 @@ class FractalView(QWidget):
         self,
         resolution: int,
         data: np.ndarray,
-        final_velocities: np.ndarray | None,
+        extra: np.ndarray | None,
     ) -> None:
         """Handle a completed progressive level.
 
-        In basin mode, data is (N, 4) final state.
-        In angle mode, data is (N, 2, n_samples) snapshots.
+        In basin mode, data is (N, 4) final state and extra is
+        (N,) convergence_times. In angle mode, data is (N, 2, n_samples)
+        snapshots and extra is (N, 2) final_velocities.
         """
         params = self.controls.get_params()
         viewport = self.canvas.get_viewport()
@@ -259,13 +272,16 @@ class FractalView(QWidget):
             resolution=resolution,
         )
         key = CacheKey.from_viewport(level_viewport, params)
-        self._cache.put(key, data)
 
-        # Display this level: basin vs angle mode
         if self._basin_mode:
-            self._display_basin(data)
+            # Pack final_state (N,4) + convergence_times (N,) into (N,5)
+            convergence_times = extra
+            packed = np.column_stack([data, convergence_times]).astype(np.float32)
+            self._cache.put(key, packed)
+            self._display_basin(packed)
         else:
-            self._current_final_velocities = final_velocities
+            self._cache.put(key, data)
+            self._current_final_velocities = extra
             self.canvas.display(data, self.controls.get_time_index())
 
         logger.debug(
@@ -349,6 +365,10 @@ class FractalView(QWidget):
             from fractal.cache import _params_hash
             self._cache.invalidate_params(_params_hash(old_params))
 
+        # Clear pinned trajectories — they were computed with old params
+        self.inspect_column.clear_all()
+        self.canvas.clear_markers()
+
         self._current_params = new_params
         viewport = self.canvas.get_viewport()
         self._start_computation(viewport)
@@ -384,16 +404,22 @@ class FractalView(QWidget):
         self.canvas.set_winding_colormap(name)
         self.inspect_column.set_winding_colormap(name)
 
-    def _display_basin(self, final_state: np.ndarray) -> None:
-        """Display the final-state winding number image.
+        # Recolor canvas markers to match new colormap
+        for row_id, color_rgb in self.inspect_column.get_marker_colors().items():
+            self.canvas.update_marker_color(row_id, color_rgb)
+
+    def _display_basin(self, packed: np.ndarray) -> None:
+        """Display the final-state winding number image with convergence shading.
 
         Args:
-            final_state: (N, 4) float32 [theta1, theta2, omega1, omega2].
+            packed: (N, 5) float32 — columns 0-3 are final state
+                [theta1, theta2, omega1, omega2], column 4 is convergence time.
         """
-        self._basin_final_state = final_state
-        theta1_final = final_state[:, 0].astype(np.float32)
-        theta2_final = final_state[:, 1].astype(np.float32)
-        self.canvas.display_basin_final(theta1_final, theta2_final)
+        self._basin_final_state = packed[:, :4]
+        theta1_final = packed[:, 0].astype(np.float32)
+        theta2_final = packed[:, 1].astype(np.float32)
+        convergence_times = packed[:, 4].astype(np.float32)
+        self.canvas.display_basin_final(theta1_final, theta2_final, convergence_times)
 
     # -- Inspect tool: hover + click-to-pin --
 
@@ -520,6 +546,16 @@ class FractalView(QWidget):
             np.array([float(final_state[1])], dtype=np.float32),
         )
         n1, n2 = int(n1_arr[0]), int(n2_arr[0])
+
+        # Look up basin color for the marker
+        colormap_name = self.canvas.winding_colormap_name
+        colormap_fn = WINDING_COLORMAPS.get(colormap_name)
+        if colormap_fn is not None:
+            b, g, r, _a = get_single_winding_color(n1, n2, colormap_fn)
+            color_rgb = (r, g, b)
+        else:
+            color_rgb = (255, 255, 255)
+        self.canvas.update_marker_color(row_id, color_rgb)
 
         # Pass time params and add row to the inspect column with winding numbers
         self.inspect_column.set_time_params(t_end, DEFAULT_DT)

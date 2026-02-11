@@ -98,6 +98,33 @@ See [inspect-tool.md](inspect-tool.md) for the inspect mode data flow.
 All modes support Ctrl+click for IC selection (emits `ic_selected`, launches
 trajectory in pendulum mode).
 
+### Pinned Trajectory Markers
+
+When a trajectory is pinned in inspect mode, a colored X marker is drawn on
+the canvas at the corresponding (theta1, theta2) location.
+
+**Data**: `_pinned_markers: dict[str, tuple[float, float, tuple[int, int, int]]]`
+maps row_id to `(theta1, theta2, color_rgb)`.
+
+**Drawing**: Each marker is drawn as a two-layer X — a dark outline (3px wide)
+drawn behind a colored fill (2px wide, using the basin colormap color).
+
+**Highlight**: When the user hovers over a `TrajectoryIndicator` circle in the
+inspect column, the corresponding marker grows larger (8px half-size vs 5px
+normal) and the outline widens (4px vs 3px). Tracked by
+`_highlighted_marker_id`.
+
+**Color updates**: Marker colors update when the winding colormap changes,
+synced through `update_marker_color()`.
+
+**API**:
+- `add_marker(row_id, theta1, theta2, color_rgb=(255,255,255))` — add marker
+- `update_marker_color(row_id, color_rgb)` — change marker color
+- `highlight_marker(row_id)` — enlarge marker on indicator hover
+- `unhighlight_marker()` — restore normal size
+- `remove_marker(row_id)` — remove by ID
+- `clear_markers()` — remove all
+
 ## Pan/Zoom Mechanics
 
 - **Zoom**: Mouse wheel centered on cursor (1.2× per notch)

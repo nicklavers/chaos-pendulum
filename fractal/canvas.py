@@ -29,7 +29,7 @@ from fractal.bivariate import (
 )
 from fractal.winding import (
     winding_to_argb, build_winding_legend, WINDING_COLORMAPS,
-    winding_direction_brightness,
+    winding_modular_grid,
 )
 
 
@@ -141,8 +141,8 @@ class FractalCanvas(QWidget):
         self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
 
         # Viewport state
-        self._center_theta1 = 0.0
-        self._center_theta2 = 0.0
+        self._center_theta1 = math.pi
+        self._center_theta2 = math.pi
         self._span_theta1 = 2 * math.pi
         self._span_theta2 = 2 * math.pi
         self._resolution = 256
@@ -165,12 +165,13 @@ class FractalCanvas(QWidget):
 
         # Basin (winding number) mode state
         self._basin_mode = False
-        self._winding_colormap_name = "Direction + Brightness"
-        self._winding_colormap_fn = winding_direction_brightness
+        self._winding_colormap_name = "Modular Grid (5\u00d75)"
+        self._winding_colormap_fn = winding_modular_grid
         self._cached_winding_legend_name: str | None = None
         self._cached_winding_legend_image = None
         self._basin_theta1_final: np.ndarray | None = None
         self._basin_theta2_final: np.ndarray | None = None
+        self._basin_convergence_times: np.ndarray | None = None
 
         # Tool mode
         self._tool_mode = TOOL_ZOOM
@@ -205,8 +206,9 @@ class FractalCanvas(QWidget):
         self._hover_theta1 = None
         self._hover_theta2 = None
 
-        # Pinned trajectory markers: row_id -> (theta1, theta2) physics coords
-        self._pinned_markers: dict[str, tuple[float, float]] = {}
+        # Pinned trajectory markers: row_id -> (theta1, theta2, color_rgb)
+        self._pinned_markers: dict[str, tuple[float, float, tuple[int, int, int]]] = {}
+        self._highlighted_marker_id: str | None = None
 
     # -- Public interface --
 
@@ -261,6 +263,11 @@ class FractalCanvas(QWidget):
         """Toggle basin (winding number) display mode."""
         self._basin_mode = basin
 
+    @property
+    def winding_colormap_name(self) -> str:
+        """Currently active winding colormap name."""
+        return self._winding_colormap_name
+
     def set_winding_colormap(self, name: str) -> None:
         """Change the active winding colormap and refresh."""
         if name not in WINDING_COLORMAPS:
@@ -272,18 +279,23 @@ class FractalCanvas(QWidget):
             self._rebuild_image()
 
     def display_basin_final(
-        self, theta1_final: np.ndarray, theta2_final: np.ndarray,
+        self,
+        theta1_final: np.ndarray,
+        theta2_final: np.ndarray,
+        convergence_times: np.ndarray | None = None,
     ) -> None:
-        """Update display in basin mode from final angles only.
+        """Update display in basin mode from final angles and convergence times.
 
         Args:
             theta1_final: (N,) float32 array of final unwrapped theta1 values.
             theta2_final: (N,) float32 array of final unwrapped theta2 values.
+            convergence_times: (N,) float32 array of convergence times.
         """
         self._basin_mode = True
         self._current_snapshots = None  # No time series in basin mode
         self._basin_theta1_final = theta1_final
         self._basin_theta2_final = theta2_final
+        self._basin_convergence_times = convergence_times
         self._rebuild_image()
 
     def set_resolution(self, resolution: int) -> None:
@@ -375,20 +387,67 @@ class FractalCanvas(QWidget):
 
     # -- Pinned marker management --
 
-    def add_marker(self, row_id: str, theta1: float, theta2: float) -> None:
-        """Add or update a pinned trajectory marker on the canvas."""
-        self._pinned_markers = {**self._pinned_markers, row_id: (theta1, theta2)}
+    def add_marker(
+        self, row_id: str, theta1: float, theta2: float,
+        color_rgb: tuple[int, int, int] = (255, 255, 255),
+    ) -> None:
+        """Add or update a pinned trajectory marker on the canvas.
+
+        Args:
+            row_id: Unique identifier for this marker.
+            theta1: Physics-space theta1 coordinate.
+            theta2: Physics-space theta2 coordinate.
+            color_rgb: (R, G, B) fill color for the marker.
+        """
+        self._pinned_markers = {
+            **self._pinned_markers,
+            row_id: (theta1, theta2, color_rgb),
+        }
         self.update()
+
+    def update_marker_color(
+        self, row_id: str, color_rgb: tuple[int, int, int],
+    ) -> None:
+        """Update the color of an existing marker.
+
+        Args:
+            row_id: Marker to update.
+            color_rgb: New (R, G, B) fill color.
+        """
+        entry = self._pinned_markers.get(row_id)
+        if entry is None:
+            return
+        theta1, theta2, _old_color = entry
+        self._pinned_markers = {
+            **self._pinned_markers,
+            row_id: (theta1, theta2, color_rgb),
+        }
+        self.update()
+
+    def highlight_marker(self, row_id: str) -> None:
+        """Highlight a marker (e.g. on indicator hover)."""
+        if self._highlighted_marker_id != row_id:
+            self._highlighted_marker_id = row_id
+            self.update()
+
+    def unhighlight_marker(self) -> None:
+        """Remove marker highlight."""
+        if self._highlighted_marker_id is not None:
+            self._highlighted_marker_id = None
+            self.update()
 
     def remove_marker(self, row_id: str) -> None:
         """Remove a pinned trajectory marker by row_id."""
         new_markers = {k: v for k, v in self._pinned_markers.items() if k != row_id}
         self._pinned_markers = new_markers
+        if self._highlighted_marker_id == row_id:
+            self._highlighted_marker_id = None
         self.update()
 
     def clear_markers(self) -> None:
         """Remove all pinned trajectory markers."""
         self._pinned_markers = {}
+        self._highlighted_marker_id = None
         self.update()
 
     # -- Image rendering --
@@ -436,6 +495,7 @@ class FractalCanvas(QWidget):
             theta2_final.astype(np.float32),
             self._winding_colormap_fn,
             res,
+            convergence_times=self._basin_convergence_times,
         )
         self._current_image = numpy_to_qimage(argb)
         self.update()
@@ -1023,25 +1083,48 @@ class FractalCanvas(QWidget):
             painter.setBrush(QColor(200, 200, 200, alpha // 3))
             painter.drawRect(self._ghost_rect)
 
-        # Draw pinned trajectory markers (white X at each location)
+        # Draw pinned trajectory markers (colored X with dark outline).
+        # Two passes: non-highlighted first, then highlighted on top.
         if self._pinned_markers:
-            marker_pen = QPen(QColor(255, 255, 255, 220))
-            marker_pen.setWidth(2)
-            painter.setPen(marker_pen)
-            marker_size = 5  # half-size of the X
+            highlighted_id = self._highlighted_marker_id
+            for pass_highlighted in (False, True):
+                for row_id, (theta1, theta2, color_rgb) in self._pinned_markers.items():
+                    is_highlighted = (row_id == highlighted_id)
+                    if is_highlighted != pass_highlighted:
+                        continue
 
-            for theta1, theta2 in self._pinned_markers.values():
-                px, py = self._physics_to_pixel(theta1, theta2)
-                # Clip to image area
-                if (img_x <= px <= img_x + side
-                        and img_y <= py <= img_y + side):
+                    px, py = self._physics_to_pixel(theta1, theta2)
+                    if not (img_x <= px <= img_x + side
+                            and img_y <= py <= img_y + side):
+                        continue
+
+                    marker_size = 8 if is_highlighted else 5
+                    ipx, ipy = int(px), int(py)
+
+                    # Dark outline (behind the colored X)
+                    outline_pen = QPen(QColor(0, 0, 0, 200))
+                    outline_pen.setWidth(6 if is_highlighted else 3)
+                    painter.setPen(outline_pen)
                     painter.drawLine(
-                        int(px - marker_size), int(py - marker_size),
-                        int(px + marker_size), int(py + marker_size),
+                        ipx - marker_size, ipy - marker_size,
+                        ipx + marker_size, ipy + marker_size,
                     )
                     painter.drawLine(
-                        int(px + marker_size), int(py - marker_size),
-                        int(px - marker_size), int(py + marker_size),
+                        ipx + marker_size, ipy - marker_size,
+                        ipx - marker_size, ipy + marker_size,
+                    )
+
+                    # Colored fill
+                    fill_pen = QPen(QColor(*color_rgb, 240))
+                    fill_pen.setWidth(2)
+                    painter.setPen(fill_pen)
+                    painter.drawLine(
+                        ipx - marker_size, ipy - marker_size,
+                        ipx + marker_size, ipy + marker_size,
+                    )
+                    painter.drawLine(
+                        ipx + marker_size, ipy - marker_size,
+                        ipx - marker_size, ipy + marker_size,
                     )
 
         painter.end()
@@ -1177,8 +1260,8 @@ class FractalCanvas(QWidget):
         key = event.key()
 
         if key == Qt.Key.Key_Home:
-            self._center_theta1 = 0.0
-            self._center_theta2 = 0.0
+            self._center_theta1 = math.pi
+            self._center_theta2 = math.pi
             self._span_theta1 = 2 * math.pi
             self._span_theta2 = 2 * math.pi
             self.viewport_changed.emit(self.get_viewport())

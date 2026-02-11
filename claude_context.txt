@@ -73,10 +73,7 @@ initial conditions.
 - Log-scale spread sliders span 10 orders of magnitude (1e-10 to max)
 - DOP853 at 1e-14 tolerances pushes noise floor to ~1e-10
 
-## Uncommitted Changes
-- DOP853 + 1e-14 tolerances in simulation.py
-- Log-scale spread sliders in visualization.py
-- Fixed-width (80px) spread value labels to prevent layout twitching
+## All changes committed and pushed to main.
 
 ## Dependencies
 - PyQt6, numpy, scipy (see requirements.txt)

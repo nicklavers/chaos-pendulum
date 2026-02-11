@@ -30,15 +30,15 @@ chaos-pendulum/
         trajectory_indicator.py     220 lines   TrajectoryIndicator: clickable circle with winding numbers
         pendulum_diagram.py         133 lines   PendulumDiagram: stick-figure widget
         winding_circle.py           139 lines   WindingCircle: colored circle for basin hover
-        worker.py                   118 lines   FractalWorker QThread (dispatches to RK4 or DOP853)
+        worker.py                   120 lines   FractalWorker QThread (dispatches to backend RK4)
         compute.py                  183 lines   ComputeBackend Protocol, BatchResult, BasinResult, saddle_energy
-        basin_solver.py             126 lines   DOP853 adaptive solver for basin mode (final state only)
+        basin_solver.py             131 lines   DOP853 adaptive solver (UNUSED — see ADR-0013)
         _numpy_backend.py           253 lines   Vectorized NumPy RK4 for angle mode (+ energy freeze logic)
         _numba_backend.py           225 lines   @njit parallel RK4 for angle mode (+ energy freeze logic)
         cache.py                    176 lines   FractalCache, CacheKey, LRU
         coloring.py                 170 lines   HSV LUT, angle_to_argb, QImage builder (univariate)
         bivariate.py                577 lines   Torus colormaps, bivariate_to_argb, legend builder
-        winding.py                  273 lines   Winding number extraction + basin colormaps
+        winding.py                  230 lines   Winding number extraction + basin colormaps + brightness modulation
 
     tests/
         test_simulation.py
@@ -69,6 +69,10 @@ chaos-pendulum/
 - Physics equations are duplicated between `simulation.py` (scalar) and
   `fractal/_numpy_backend.py` (vectorized batch). Cross-validation test ensures
   they stay in sync. See [ADR-0001](../adr/0001-vectorized-rk4.md).
+- `fractal/basin_solver.py` (DOP853 adaptive solver) is not imported by any
+  runtime module. Basin mode uses the RK4 backends' `simulate_basin_batch()`
+  methods instead. The file is retained for potential future use but is dead
+  code. See [ADR-0013](../adr/0013-convergence-time-brightness.md).
 
 ## Dependency Graph
 
@@ -97,7 +101,6 @@ main.py --> app_window.py
                     |     --> fractal/winding_circle.py
                     |     --> fractal/winding.py
                     --> fractal/worker.py     --> fractal/compute.py
-                    |                         --> fractal/basin_solver.py --> simulation.py
                     |                              --> fractal/_numpy_backend.py
                     |                              --> fractal/_numba_backend.py
                     --> fractal/cache.py

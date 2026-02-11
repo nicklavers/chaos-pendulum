@@ -25,7 +25,8 @@ Top-level `QWidget` shown to the left of the canvas in inspect mode.
 - `_primary_id: str | None` — which trajectory is foregrounded (full opacity + trail)
 - `_dt`, `_t_end` — simulation time params for scrub label computation
 
-**Signals**: `row_removed(str)`, `all_cleared()`
+**Signals**: `row_removed(str)`, `all_cleared()`, `indicator_hovered(str)`,
+`indicator_unhovered(str)`
 
 ### MultiTrajectoryDiagram (fractal/animated_diagram.py, ~373 lines)
 
@@ -49,7 +50,7 @@ initial angles below, and an X button (shown on hover) for removal.
 - `set_highlighted(bool)` — white border for primary trajectory
 - `set_color(rgb)` — update fill color (e.g. on colormap change)
 - Contrasting text color auto-selected via brightness formula
-- **Signals**: `clicked(str)`, `remove_clicked(str)`
+- **Signals**: `clicked(str)`, `remove_clicked(str)`, `hovered(str)`, `unhovered(str)`
 
 ### PendulumDiagram (fractal/pendulum_diagram.py, ~133 lines)
 
@@ -107,12 +108,14 @@ FractalView._on_trajectory_pinned(row_id, theta1, theta2)
     |-- Run rk4_single_trajectory(params, theta1, theta2, t_end, dt)
     |-- Extract winding numbers from final state
     |-- inspect_column.set_time_params(t_end, dt)
+    |-- Look up basin color, update canvas marker color
+    |-- inspect_column.set_time_params(t_end, dt)
     |-- inspect_column.add_row(row_id, theta1, theta2, trajectory, params, n1, n2)
          |
          |-- Subsample trajectory by FRAME_SUBSAMPLE (every 6th step)
          |-- Look up basin color via current winding colormap
          |-- Create frozen PinnedTrajectory
-         |-- Create TrajectoryIndicator widget
+         |-- Create TrajectoryIndicator widget (with hover signals)
          |-- Rebuild MultiTrajectoryDiagram (all trajectories as TrajectoryInfo tuple)
          |-- Update scrub slider range
          |-- Auto-play if first trajectory
@@ -122,12 +125,14 @@ FractalView._on_trajectory_pinned(row_id, theta1, theta2)
 
 - Inspect mode: cursor changes to `PointingHandCursor`
 - Hover updates diagrams in real-time
-- Click pins a trajectory (adds to animation + indicator row)
+- Click pins a trajectory (adds to animation + indicator row + canvas marker)
+- Canvas markers are colored X shapes matching the basin colormap color
 - Click an indicator circle to foreground that trajectory
+- Hover an indicator circle to highlight the corresponding canvas marker (larger size)
 - Hover an indicator's X button to remove it
-- "Clear All" removes all pinned trajectories
+- "Clear All" removes all pinned trajectories and canvas markers
 - Scrub slider or play/pause controls the animation timeline
-- Colormap changes propagate to all indicator colors and the animation
+- Colormap changes propagate to all indicator colors, the animation, and canvas markers
 
 ## Constants
 

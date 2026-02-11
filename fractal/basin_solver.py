@@ -73,10 +73,12 @@ def simulate_basin_batch(
         atol: Absolute tolerance for DOP853.
 
     Returns:
-        BasinResult with final_state (N, 4) float32.
+        BasinResult with final_state (N, 4) float32 and
+        convergence_times (N,) float32.
     """
     n_trajectories = initial_conditions.shape[0]
     final_state = np.empty((n_trajectories, 4), dtype=np.float32)
+    convergence_times = np.full(n_trajectories, np.float32(t_end), dtype=np.float32)
 
     # Build the derivatives function (closure over params)
     def rhs(t, y):
@@ -93,7 +95,7 @@ def simulate_basin_batch(
             if cancel_check():
                 # Fill remaining with zeros and return partial result
                 final_state[i:] = 0.0
-                return BasinResult(final_state)
+                return BasinResult(final_state, convergence_times)
 
         # Progress reporting
         if progress_callback is not None and i % _CANCEL_CHECK_INTERVAL == 0:
@@ -115,6 +117,7 @@ def simulate_basin_batch(
         # Extract final state (last column of solution)
         if sol.success and sol.y.size > 0:
             final_state[i] = sol.y[:, -1].astype(np.float32)
+            convergence_times[i] = np.float32(sol.t[-1])
         else:
             # Integration failed — use initial conditions as fallback
             logger.warning("solve_ivp failed for trajectory %d: %s", i, sol.message)
@@ -124,4 +127,4 @@ def simulate_basin_batch(
     if progress_callback is not None:
         progress_callback(n_trajectories, n_trajectories)
 
-    return BasinResult(final_state)
+    return BasinResult(final_state, convergence_times)

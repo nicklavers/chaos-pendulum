@@ -35,11 +35,12 @@ class BatchResult(NamedTuple):
 class BasinResult(NamedTuple):
     """Immutable result from a basin-mode simulation.
 
-    Stores only the final state of each trajectory, not the full time series.
-    Supports tuple unpacking: ``(final_state,) = result``.
+    Stores the final state and convergence time for each trajectory.
+    Supports tuple unpacking: ``final_state, convergence_times = result``.
     """
 
-    final_state: np.ndarray  # (N, 4) float32 [theta1, theta2, omega1, omega2]
+    final_state: np.ndarray       # (N, 4) float32 [theta1, theta2, omega1, omega2]
+    convergence_times: np.ndarray  # (N,) float32 — time to cross energy threshold
 
 
 @dataclass(frozen=True)

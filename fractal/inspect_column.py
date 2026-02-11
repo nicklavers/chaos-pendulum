@@ -76,6 +76,8 @@ class InspectColumn(QWidget):
 
     row_removed = pyqtSignal(str)
     all_cleared = pyqtSignal()
+    indicator_hovered = pyqtSignal(str)
+    indicator_unhovered = pyqtSignal(str)
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
@@ -84,7 +86,7 @@ class InspectColumn(QWidget):
         self._primary_id: str | None = None
         self._indicators: dict[str, TrajectoryIndicator] = {}
         self._basin_mode = False
-        self._winding_colormap_name = "Direction + Brightness"
+        self._winding_colormap_name = "Modular Grid (5\u00d75)"
         self._current_params = DoublePendulumParams()
         self._dt = 0.01
         self._t_end = 10.0
@@ -347,6 +349,8 @@ class InspectColumn(QWidget):
         )
         indicator.clicked.connect(self._on_indicator_clicked)
         indicator.remove_clicked.connect(self._on_indicator_remove)
+        indicator.hovered.connect(self.indicator_hovered)
+        indicator.unhovered.connect(self.indicator_unhovered)
         self._indicators = {**self._indicators, row_id: indicator}
 
         # Insert before the trailing stretch
@@ -461,6 +465,13 @@ class InspectColumn(QWidget):
 
         # Rebuild animation with new colors
         self._rebuild_animation()
+
+    def get_marker_colors(self) -> dict[str, tuple[int, int, int]]:
+        """Return {row_id: (R, G, B)} for all pinned trajectories."""
+        return {
+            row_id: pt.color_rgb
+            for row_id, pt in self._pinned.items()
+        }
 
     # --- Animation & scrub ---
 
