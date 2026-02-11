@@ -1,8 +1,9 @@
 """Fractal cache: LRU cache with adaptive memory budget.
 
-Stores computed angle snapshot arrays keyed by quantized viewport
+Stores computed simulation arrays keyed by quantized viewport
 coordinates and physics parameter hash. Supports protected coarse
-levels that are never evicted.
+levels that are never evicted. Old-param results are kept in the
+LRU so returning to previously-visited params is instant.
 """
 
 from __future__ import annotations
@@ -70,7 +71,6 @@ class FractalCache:
     - Adaptive memory budget (configurable per backend)
     - Protected coarse levels (resolution <= 64) never evicted
     - Shape/dtype validation on put()
-    - Param-based invalidation
     """
 
     # Protected resolution threshold
@@ -110,6 +110,31 @@ class FractalCache:
         self._cache.move_to_end(key)
         return self._cache[key]
 
+    def best_match(self, key: CacheKey) -> np.ndarray | None:
+        """Find the highest-resolution cached entry for the same viewport+params.
+
+        Searches all entries that match *key* on every field except
+        ``resolution``, and returns the one with the highest resolution.
+        Returns None if no match exists (including at the exact resolution).
+        """
+        best_res = -1
+        best_k: CacheKey | None = None
+        for k in self._cache:
+            if (
+                k.center_theta1_q == key.center_theta1_q
+                and k.center_theta2_q == key.center_theta2_q
+                and k.span_theta1_q == key.span_theta1_q
+                and k.span_theta2_q == key.span_theta2_q
+                and k.params_hash == key.params_hash
+                and k.resolution > best_res
+            ):
+                best_res = k.resolution
+                best_k = k
+        if best_k is None:
+            return None
+        self._cache.move_to_end(best_k)
+        return self._cache[best_k]
+
     def put(self, key: CacheKey, data: np.ndarray) -> None:
         """Store simulation data in the cache.
 
@@ -140,15 +165,6 @@ class FractalCache:
 
         # Evict if over budget
         self._evict_if_needed()
-
-    def invalidate_params(self, params_hash_value: int) -> None:
-        """Remove all entries matching a specific params hash."""
-        keys_to_remove = [
-            k for k in self._cache if k.params_hash == params_hash_value
-        ]
-        for k in keys_to_remove:
-            data = self._cache.pop(k)
-            self._current_bytes = self._current_bytes - data.nbytes
 
     def clear(self) -> None:
         """Remove all cache entries."""

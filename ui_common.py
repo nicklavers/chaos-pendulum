@@ -32,9 +32,55 @@ def make_slider(minimum, maximum, value, resolution=100):
     return slider
 
 
+def make_discrete_slider(values, default):
+    """Create a QSlider that snaps to a fixed set of float values.
+
+    Args:
+        values: Sequence of float values the slider can take.
+        default: Initial value (snapped to nearest in *values*).
+
+    Returns:
+        QSlider with range [0, len(values)-1] and a ``discrete_values``
+        attribute storing the tuple of allowed values.
+    """
+    discrete_values = tuple(values)
+    if not discrete_values:
+        raise ValueError("values must be non-empty")
+    slider = QSlider(Qt.Orientation.Horizontal)
+    slider.setMinimum(0)
+    slider.setMaximum(len(discrete_values) - 1)
+    slider.discrete_values = discrete_values
+
+    # Snap default to the closest grid value
+    best_idx = min(
+        range(len(discrete_values)),
+        key=lambda i: abs(discrete_values[i] - default),
+    )
+    slider.setValue(best_idx)
+    return slider
+
+
 def slider_value(slider):
-    """Read the float value from a slider created by make_slider."""
+    """Read the float value from a slider (continuous or discrete)."""
+    if hasattr(slider, "discrete_values"):
+        return slider.discrete_values[slider.value()]
     return slider.value() / slider.resolution
+
+
+def set_slider_value(slider, value):
+    """Set a slider to the position closest to *value*.
+
+    Works for both continuous (make_slider) and discrete
+    (make_discrete_slider) sliders.
+    """
+    if hasattr(slider, "discrete_values"):
+        best_idx = min(
+            range(len(slider.discrete_values)),
+            key=lambda i: abs(slider.discrete_values[i] - value),
+        )
+        slider.setValue(best_idx)
+    else:
+        slider.setValue(int(value * slider.resolution))
 
 
 # ---------------------------------------------------------------------------
@@ -48,16 +94,23 @@ class PhysicsParamsWidget(QWidget):
     The parent can connect slider.valueChanged to detect changes.
     """
 
-    def __init__(self, parent=None):
+    def __init__(self, snap_values=None, parent=None):
         super().__init__(parent)
         layout = QGridLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
 
-        self.m1_slider = make_slider(0.1, 5.0, 1.0)
-        self.m2_slider = make_slider(0.1, 5.0, 1.4)
-        self.l1_slider = make_slider(0.1, 3.0, 1.0)
-        self.l2_slider = make_slider(0.1, 3.0, 0.3)
-        self.friction_slider = make_slider(0.0, 5.0, 0.38)
+        if snap_values is not None:
+            self.m1_slider = make_discrete_slider(snap_values["m1"], 1.0)
+            self.m2_slider = make_discrete_slider(snap_values["m2"], 1.4)
+            self.l1_slider = make_discrete_slider(snap_values["l1"], 1.0)
+            self.l2_slider = make_discrete_slider(snap_values["l2"], 0.3)
+            self.friction_slider = make_discrete_slider(snap_values["friction"], 0.38)
+        else:
+            self.m1_slider = make_slider(0.1, 5.0, 1.0)
+            self.m2_slider = make_slider(0.1, 5.0, 1.4)
+            self.l1_slider = make_slider(0.1, 3.0, 1.0)
+            self.l2_slider = make_slider(0.1, 3.0, 0.3)
+            self.friction_slider = make_slider(0.0, 5.0, 0.38)
 
         self._add_row(layout, 0, "m\u2081", self.m1_slider, " kg")
         self._add_row(layout, 1, "m\u2082", self.m2_slider, " kg")
@@ -94,13 +147,11 @@ class PhysicsParamsWidget(QWidget):
 
     def set_params(self, params):
         """Set slider positions from a DoublePendulumParams."""
-        self.m1_slider.setValue(int(params.m1 * self.m1_slider.resolution))
-        self.m2_slider.setValue(int(params.m2 * self.m2_slider.resolution))
-        self.l1_slider.setValue(int(params.l1 * self.l1_slider.resolution))
-        self.l2_slider.setValue(int(params.l2 * self.l2_slider.resolution))
-        self.friction_slider.setValue(
-            int(params.friction * self.friction_slider.resolution)
-        )
+        set_slider_value(self.m1_slider, params.m1)
+        set_slider_value(self.m2_slider, params.m2)
+        set_slider_value(self.l1_slider, params.l1)
+        set_slider_value(self.l2_slider, params.l2)
+        set_slider_value(self.friction_slider, params.friction)
 
 
 # ---------------------------------------------------------------------------

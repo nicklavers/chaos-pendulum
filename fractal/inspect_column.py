@@ -136,17 +136,10 @@ class InspectColumn(QWidget):
         self._hover_initial_diagram.setFixedSize(110, 110)
         hover_layout.addWidget(self._hover_initial_diagram)
 
-        # Hover: at-t diagram (angle mode only)
-        self._hover_at_t_diagram = PendulumDiagram()
-        self._hover_at_t_diagram.set_label("At t = 0.0 s")
-        self._hover_at_t_diagram.setFixedSize(110, 110)
-        hover_layout.addWidget(self._hover_at_t_diagram)
-
-        # Hover: winding circle (basin mode only, hidden by default)
+        # Hover: winding circle (basin mode)
         self._hover_winding_circle = WindingCircle()
         self._hover_winding_circle.set_label("Winding")
         self._hover_winding_circle.setFixedSize(110, 110)
-        self._hover_winding_circle.setVisible(False)
         hover_layout.addWidget(self._hover_winding_circle)
 
         # Angle labels under the hover section
@@ -233,34 +226,10 @@ class InspectColumn(QWidget):
     # --- Basin mode toggle ---
 
     def set_basin_mode(self, basin: bool) -> None:
-        """Toggle between basin and angle mode hover displays."""
+        """Set basin mode. Always True now (angle mode removed from UI)."""
         self._basin_mode = basin
-        self._hover_at_t_diagram.setVisible(not basin)
-        self._hover_winding_circle.setVisible(basin)
 
     # --- Hover updates ---
-
-    def update_hover_angle(
-        self,
-        theta1_init: float,
-        theta2_init: float,
-        theta1_at_t: float,
-        theta2_at_t: float,
-        t_value: float,
-        params: DoublePendulumParams,
-    ) -> None:
-        """Update the hover display for angle mode."""
-        self._hover_initial_diagram.set_params(params)
-        self._hover_initial_diagram.set_state(theta1_init, theta2_init)
-
-        self._hover_at_t_diagram.set_params(params)
-        self._hover_at_t_diagram.set_state(theta1_at_t, theta2_at_t)
-        self._hover_at_t_diagram.set_label(f"At t = {t_value:.1f} s")
-
-        self._hover_angles_label.setText(
-            f"\u03b8\u2081={math.degrees(theta1_init):.1f}\u00b0, "
-            f"\u03b8\u2082={math.degrees(theta2_init):.1f}\u00b0"
-        )
 
     def update_hover_basin(
         self,
@@ -283,9 +252,8 @@ class InspectColumn(QWidget):
         )
 
     def set_hover_params(self, params: DoublePendulumParams) -> None:
-        """Update physics params on both hover diagrams."""
+        """Update physics params on the hover diagram."""
         self._hover_initial_diagram.set_params(params)
-        self._hover_at_t_diagram.set_params(params)
 
     # --- Pinned trajectory management ---
 

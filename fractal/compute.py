@@ -62,7 +62,7 @@ class FractalTask:
     viewport: FractalViewport
     t_end: float
     dt: float
-    n_samples: int
+    n_samples: int = DEFAULT_N_SAMPLES
     basin: bool = False
 
 

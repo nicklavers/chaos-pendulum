@@ -152,24 +152,6 @@ class TestFractalCache:
         # Protected entry should still be there
         assert cache.get(protected_key) is not None
 
-    def test_invalidate_params(self):
-        """Invalidating by params hash should remove matching entries."""
-        cache = FractalCache(max_bytes=100 * 1024 * 1024)
-        params1 = DoublePendulumParams(m1=1.0)
-        params2 = DoublePendulumParams(m1=2.0)
-
-        key1 = _make_key(params=params1)
-        key2 = _make_key(params=params2, center1=1.0)
-
-        cache.put(key1, _make_data())
-        cache.put(key2, _make_data())
-        assert cache.entry_count == 2
-
-        cache.invalidate_params(_params_hash(params1))
-        assert cache.entry_count == 1
-        assert cache.get(key1) is None
-        assert cache.get(key2) is not None
-
     def test_clear(self):
         cache = FractalCache(max_bytes=100 * 1024 * 1024)
         cache.put(_make_key(), _make_data())
@@ -179,6 +161,48 @@ class TestFractalCache:
         cache.clear()
         assert cache.entry_count == 0
         assert cache.memory_used_bytes == 0
+
+    def test_best_match_returns_highest_resolution(self):
+        """best_match should return the highest-res entry at the same viewport."""
+        cache = FractalCache(max_bytes=100 * 1024 * 1024)
+        data_64 = _make_data(64, 96)
+        data_128 = _make_data(128, 96)
+
+        cache.put(_make_key(resolution=64), data_64)
+        cache.put(_make_key(resolution=128), data_128)
+
+        # Query at resolution 256 — should get the 128 entry
+        query_key = _make_key(resolution=256)
+        result = cache.best_match(query_key)
+        assert result is not None
+        np.testing.assert_array_equal(result, data_128)
+
+    def test_best_match_returns_none_when_empty(self):
+        """best_match should return None when no entries match."""
+        cache = FractalCache(max_bytes=100 * 1024 * 1024)
+        result = cache.best_match(_make_key())
+        assert result is None
+
+    def test_best_match_ignores_different_viewport(self):
+        """best_match should not return entries from a different viewport."""
+        cache = FractalCache(max_bytes=100 * 1024 * 1024)
+        cache.put(_make_key(resolution=128, center1=1.0), _make_data(128, 96))
+
+        query_key = _make_key(resolution=256, center1=0.0)
+        result = cache.best_match(query_key)
+        assert result is None
+
+    def test_best_match_ignores_different_params(self):
+        """best_match should not return entries with different physics params."""
+        cache = FractalCache(max_bytes=100 * 1024 * 1024)
+        params1 = DoublePendulumParams(m1=1.0)
+        params2 = DoublePendulumParams(m1=2.0)
+
+        cache.put(_make_key(resolution=128, params=params1), _make_data(128, 96))
+
+        query_key = _make_key(resolution=256, params=params2)
+        result = cache.best_match(query_key)
+        assert result is None
 
     def test_put_validates_dtype(self):
         cache = FractalCache(max_bytes=100 * 1024 * 1024)
