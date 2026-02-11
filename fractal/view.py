@@ -12,27 +12,28 @@ from __future__ import annotations
 
 import logging
 import math
+from pathlib import Path
 
 import numpy as np
-from PyQt6.QtCore import Qt
+from PyQt6.QtCore import Qt, QTimer
 from PyQt6.QtWidgets import QWidget, QHBoxLayout, QSplitter
 
 from simulation import DoublePendulumParams
-from fractal.canvas import FractalCanvas
+from fractal.canvas import FractalCanvas, render_cube_to_qimage
 from fractal.controls import FractalControls
 from fractal.inspect_column import InspectColumn
 from fractal.cache import FractalCache, CacheKey
 from fractal.compute import (
     FractalViewport, FractalTask,
-    get_default_backend, get_progressive_levels, DEFAULT_N_SAMPLES,
+    get_default_backend, get_progressive_levels,
     build_initial_conditions,
 )
-from fractal.coloring import interpolate_angle
 from fractal._numpy_backend import rk4_single_trajectory
 from fractal.winding import (
     extract_winding_numbers_relative,
     get_single_winding_color, WINDING_COLORMAPS,
 )
+from fractal.data_cube import DataCubeIndex
 from fractal.worker import FractalWorker
 from ui_common import LoadingOverlay
 
@@ -40,6 +41,12 @@ logger = logging.getLogger(__name__)
 
 # Default RK4 step size
 DEFAULT_DT = 0.01
+
+# Debounce delay: after slider stops moving, wait this long before exact compute
+_DEBOUNCE_MS = 300
+
+# Default cube data file path (relative to project root)
+_CUBE_DATA_PATH = Path(__file__).resolve().parent.parent / "data" / "cube_v1.npz"
 
 
 class FractalView(QWidget):
@@ -90,32 +97,36 @@ class FractalView(QWidget):
         self._retiring_workers: list[FractalWorker] = []
         self._current_params: DoublePendulumParams | None = None
 
-        # Basin display mode — sync with controls default
-        self._basin_mode = self.controls.get_display_mode() == "basin"
-        self.canvas.set_basin_mode(self._basin_mode)
-        self.inspect_column.set_basin_mode(self._basin_mode)
-        self._current_final_velocities: np.ndarray | None = None
+        # Basin mode is always on (angle mode removed from UI)
+        self.canvas.set_basin_mode(True)
+        self.inspect_column.set_basin_mode(True)
 
         # Cached final state for basin-mode hover lookup
         self._basin_final_state: np.ndarray | None = None
+
+        # Data cube for instant slider preview
+        self._cube: DataCubeIndex | None = None
+        self._load_cube()
+
+        # Debounce timer for physics slider changes
+        self._physics_debounce = QTimer()
+        self._physics_debounce.setSingleShot(True)
+        self._physics_debounce.setInterval(_DEBOUNCE_MS)
+        self._physics_debounce.timeout.connect(self._on_physics_debounced)
 
         # Status labels (AppWindow will read these)
         self._status_text = ""
 
         # Wire signals
         self.canvas.viewport_changed.connect(self._on_viewport_changed)
-        self.controls.time_index_changed.connect(self._on_time_index_changed)
-        self.controls.colormap_changed.connect(self._on_colormap_changed)
-        self.controls.angle_selection_changed.connect(self._on_angle_changed)
-        self.controls.torus_colormap_changed.connect(self._on_torus_colormap_changed)
         self.controls.resolution_changed.connect(self._on_resolution_changed)
         self.controls.physics_changed.connect(self._on_physics_changed)
-        self.controls.t_end_changed.connect(self._on_t_end_changed)
+        self.controls.physics_released.connect(self._on_physics_released)
         self.controls.zoom_out_clicked.connect(self._on_zoom_out)
         self.controls.tool_mode_changed.connect(self._on_tool_mode_changed)
-        self.controls.display_mode_changed.connect(self._on_display_mode_changed)
         self.controls.winding_colormap_changed.connect(self._on_winding_colormap_changed)
         self.canvas.hover_updated.connect(self._on_hover_updated)
+        self.canvas.pan_started.connect(self._on_pan_started)
 
         # Inspect column signals
         self.canvas.trajectory_pinned.connect(self._on_trajectory_pinned)
@@ -137,9 +148,6 @@ class FractalView(QWidget):
         """Called when switching to fractal mode."""
         if params is not None:
             self.controls.set_params(params)
-            # Basin mode requires friction > 0; re-enforce after param override
-            if self._basin_mode and self.controls.get_friction() < 0.01:
-                self.controls.set_friction(0.3)
             self._current_params = self.controls.get_params()
 
         self.canvas.set_viewport(center_theta1, center_theta2)
@@ -160,6 +168,17 @@ class FractalView(QWidget):
     def get_params(self) -> DoublePendulumParams:
         return self.controls.get_params()
 
+    def _load_cube(self) -> None:
+        """Attempt to load the precomputed data cube. Silently fails if missing."""
+        try:
+            self._cube = DataCubeIndex.from_npz(_CUBE_DATA_PATH)
+        except FileNotFoundError:
+            logger.info("No data cube found at %s — preview disabled", _CUBE_DATA_PATH)
+            self._cube = None
+        except Exception:
+            logger.exception("Failed to load data cube from %s", _CUBE_DATA_PATH)
+            self._cube = None
+
     # -- Computation pipeline --
 
     def _start_computation(self, viewport: FractalViewport) -> None:
@@ -167,25 +186,47 @@ class FractalView(QWidget):
         params = self.controls.get_params()
         self._current_params = params
 
-        # Determine t_end: auto-scaled in basin mode, user-set in angle mode
-        if self._basin_mode:
-            mu = max(params.friction, 0.01)
-            t_end = min(5.0 / mu, 500.0)
-        else:
-            t_end = self.controls.get_t_end()
+        # Basin mode: t_end auto-scaled from friction
+        mu = max(params.friction, 0.01)
+        t_end = min(5.0 / mu, 500.0)
 
         # Check cache for the full-resolution result
         full_key = CacheKey.from_viewport(viewport, params)
         cached = self._cache.get(full_key)
         if cached is not None:
             logger.debug("Cache hit for %s", full_key)
-            if self._basin_mode:
-                self._display_basin(cached)
-            else:
-                self.canvas.display(cached, self.controls.get_time_index())
+            self._display_basin(cached)
+            self.canvas.clear_stale()
             return
 
-        # Cache miss: start progressive pipeline
+        # Check for a lower-resolution cached result at the same viewport+params
+        best = self._cache.best_match(full_key)
+        if best is not None:
+            self._display_basin(best)
+        else:
+            # Fall back to instant cube preview (only at full viewport)
+            self._show_cube_preview(params)
+
+        # Cache miss at full resolution: start progressive pipeline.
+        # Skip levels already cached at this viewport+params.
+        levels_needed = []
+        for level_res in self._progressive_levels:
+            level_vp = FractalViewport(
+                center_theta1=viewport.center_theta1,
+                center_theta2=viewport.center_theta2,
+                span_theta1=viewport.span_theta1,
+                span_theta2=viewport.span_theta2,
+                resolution=level_res,
+            )
+            level_key = CacheKey.from_viewport(level_vp, params)
+            if self._cache.get(level_key) is None:
+                levels_needed.append(level_res)
+
+        if not levels_needed:
+            # All levels already cached — nothing to compute
+            self.canvas.clear_stale()
+            return
+
         self._cancel_worker()
 
         # Update canvas resolution
@@ -196,11 +237,10 @@ class FractalView(QWidget):
             viewport=viewport,
             t_end=t_end,
             dt=DEFAULT_DT,
-            n_samples=DEFAULT_N_SAMPLES,
-            basin=self._basin_mode,
+            basin=True,
         )
 
-        self._worker = FractalWorker(task, self._backend, self._progressive_levels)
+        self._worker = FractalWorker(task, self._backend, levels_needed)
         self._worker.level_complete.connect(self._on_level_complete)
         self._worker.progress.connect(self._on_progress)
         self._worker.all_complete.connect(self._on_all_complete)
@@ -258,9 +298,7 @@ class FractalView(QWidget):
     ) -> None:
         """Handle a completed progressive level.
 
-        In basin mode, data is (N, 4) final state and extra is
-        (N,) convergence_times. In angle mode, data is (N, 2, n_samples)
-        snapshots and extra is (N, 2) final_velocities.
+        Data is (N, 4) final state and extra is (N,) convergence_times.
         """
         params = self.controls.get_params()
         viewport = self.canvas.get_viewport()
@@ -275,16 +313,11 @@ class FractalView(QWidget):
         )
         key = CacheKey.from_viewport(level_viewport, params)
 
-        if self._basin_mode:
-            # Pack final_state (N,4) + convergence_times (N,) into (N,5)
-            convergence_times = extra
-            packed = np.column_stack([data, convergence_times]).astype(np.float32)
-            self._cache.put(key, packed)
-            self._display_basin(packed)
-        else:
-            self._cache.put(key, data)
-            self._current_final_velocities = extra
-            self.canvas.display(data, self.controls.get_time_index())
+        # Pack final_state (N,4) + convergence_times (N,) into (N,5)
+        convergence_times = extra
+        packed = np.column_stack([data, convergence_times]).astype(np.float32)
+        self._cache.put(key, packed)
+        self._display_basin(packed)
 
         logger.debug(
             "Level %dx%d complete, cache: %.1f MB",
@@ -301,6 +334,7 @@ class FractalView(QWidget):
         """All progressive levels finished."""
         self.loading_overlay.stop()
         self.canvas.activate_pending_ghost()
+        self.canvas.clear_stale()
 
     def _on_worker_finished(self) -> None:
         """Worker thread has exited (may be due to cancellation)."""
@@ -320,23 +354,6 @@ class FractalView(QWidget):
     def _on_zoom_out(self) -> None:
         """Zoom out button clicked: delegate to the canvas."""
         self.canvas.zoom_out()
-
-    def _on_time_index_changed(self, time_index: float) -> None:
-        """Time slider moved: update display from current snapshots."""
-        self.canvas.set_time_index(time_index)
-        self.controls.update_time_label(self.controls.get_t_end())
-
-    def _on_colormap_changed(self, name: str) -> None:
-        """Colormap dropdown changed."""
-        self.canvas.set_colormap(name)
-
-    def _on_angle_changed(self, angle_index: int) -> None:
-        """Angle display selection changed."""
-        self.canvas.set_angle_index(angle_index)
-
-    def _on_torus_colormap_changed(self, name: str) -> None:
-        """Torus colormap dropdown changed."""
-        self.canvas.set_torus_colormap(name)
 
     def _on_resolution_changed(self, resolution: int) -> None:
         """Resolution dropdown changed: recompute at new resolution."""
@@ -359,13 +376,39 @@ class FractalView(QWidget):
         self._start_computation(new_viewport)
 
     def _on_physics_changed(self) -> None:
-        """Physics parameters changed: invalidate cache and recompute."""
-        old_params = self._current_params
+        """Physics slider value changed (fires continuously during drag).
+
+        Shows the best cached result if available (full-res or lower-res),
+        otherwise falls back to the 64x64 cube preview. Exact compute is
+        deferred until the slider is released (see _on_physics_released).
+        """
+        new_params = self.controls.get_params()
+        viewport = self.canvas.get_viewport()
+        full_key = CacheKey.from_viewport(viewport, new_params)
+        cached = self._cache.get(full_key)
+        if cached is not None:
+            self._display_basin(cached)
+            return
+        best = self._cache.best_match(full_key)
+        if best is not None:
+            self._display_basin(best)
+            return
+        self._show_cube_preview(new_params)
+
+    def _on_physics_released(self) -> None:
+        """Physics slider released (mouse-up): start debounce for exact compute."""
+        self._physics_debounce.start()
+
+    def _on_physics_debounced(self) -> None:
+        """Debounce timer fired: start exact compute for new params.
+
+        Old-param results are kept in the LRU cache so returning to
+        previously-visited params is instant (no recompute).
+        """
         new_params = self.controls.get_params()
 
-        if old_params is not None:
-            from fractal.cache import _params_hash
-            self._cache.invalidate_params(_params_hash(old_params))
+        # Clear stale overlay — it was computed with old params
+        self.canvas.clear_stale()
 
         # Clear pinned trajectories — they were computed with old params
         self.inspect_column.clear_all()
@@ -375,31 +418,71 @@ class FractalView(QWidget):
         viewport = self.canvas.get_viewport()
         self._start_computation(viewport)
 
-    def _on_t_end_changed(self) -> None:
-        """Simulation duration changed: invalidate all cache and recompute."""
-        self._cache.clear()
+    def _show_cube_preview(self, params: DoublePendulumParams) -> None:
+        """Display an instant cube preview for the given params.
+
+        Only works when the viewport is at the default full [0, 2pi]^2 range,
+        since the cube is precomputed at that viewport.
+
+        Args:
+            params: Current physics parameters.
+        """
+        if self._cube is None:
+            return
+
         viewport = self.canvas.get_viewport()
-        self._start_computation(viewport)
+
+        # Only use cube preview at full viewport (not zoomed in)
+        full_span = 2 * math.pi
+        if (
+            abs(viewport.span_theta1 - full_span) > 0.01
+            or abs(viewport.span_theta2 - full_span) > 0.01
+        ):
+            return
+
+        cube_slice = self._cube.nearest_lookup(
+            m1=params.m1,
+            m2=params.m2,
+            l1=params.l1,
+            l2=params.l2,
+            friction=params.friction,
+        )
+
+        self.canvas.display_basin_from_cube(cube_slice)
+
+    def _on_pan_started(self) -> None:
+        """Pan drag started: provide a low-res cube background for edge fill.
+
+        Renders the nearest cube slice to a QImage and sends it to the
+        canvas so exposed edges during pan show blurry data instead of black.
+        """
+        if self._cube is None:
+            return
+
+        params = self.controls.get_params()
+        cube_slice = self._cube.nearest_lookup(
+            m1=params.m1,
+            m2=params.m2,
+            l1=params.l1,
+            l2=params.l2,
+            friction=params.friction,
+        )
+
+        image = render_cube_to_qimage(cube_slice, self.canvas._winding_colormap_fn)
+        full_viewport = FractalViewport(
+            center_theta1=math.pi,
+            center_theta2=math.pi,
+            span_theta1=2 * math.pi,
+            span_theta2=2 * math.pi,
+            resolution=64,
+        )
+        self.canvas.set_pan_background(image, full_viewport)
 
     def _on_tool_mode_changed(self, mode: str) -> None:
         """Tool mode changed: show/hide inspect column, set canvas mode."""
         self.canvas.set_tool_mode(mode)
         show_inspect = (mode == "inspect")
         self.inspect_column.setVisible(show_inspect)
-
-    def _on_display_mode_changed(self, mode: str) -> None:
-        """Handle Angle/Basin toggle from controls."""
-        self._basin_mode = (mode == "basin")
-        self.canvas.set_basin_mode(self._basin_mode)
-        self.inspect_column.set_basin_mode(self._basin_mode)
-        self._cache.clear()
-
-        # Clear pinned trajectories on mode switch
-        self.inspect_column.clear_all()
-        self.canvas.clear_markers()
-
-        viewport = self.canvas.get_viewport()
-        self._start_computation(viewport)
 
     def _on_winding_colormap_changed(self, name: str) -> None:
         """Winding colormap dropdown changed."""
@@ -476,11 +559,7 @@ class FractalView(QWidget):
     def _on_hover_updated(self, theta1: float, theta2: float) -> None:
         """Inspect tool: look up data for hovered point and update column."""
         params = self.controls.get_params()
-
-        if self._basin_mode:
-            self._on_hover_basin(theta1, theta2, params)
-        else:
-            self._on_hover_angle(theta1, theta2, params)
+        self._on_hover_basin(theta1, theta2, params)
 
     def _on_hover_basin(
         self, theta1: float, theta2: float, params: DoublePendulumParams,
@@ -524,63 +603,15 @@ class FractalView(QWidget):
             theta1, theta2, n1, n2, colormap_fn, params,
         )
 
-    def _on_hover_angle(
-        self, theta1: float, theta2: float, params: DoublePendulumParams,
-    ) -> None:
-        """Angle mode hover: show initial diagram + at-t diagram."""
-        snapshots = self.canvas._current_snapshots
-        if snapshots is None:
-            return
-
-        viewport = self.canvas.get_viewport()
-        res = int(np.sqrt(snapshots.shape[0]))
-
-        # Convert hovered physics coords to grid indices
-        half_span1 = viewport.span_theta1 / 2
-        half_span2 = viewport.span_theta2 / 2
-        vmin1 = viewport.center_theta1 - half_span1
-        vmin2 = viewport.center_theta2 - half_span2
-
-        nx = (theta1 - vmin1) / viewport.span_theta1
-        ny = (theta2 - vmin2) / viewport.span_theta2
-
-        col = int(max(0, min(res - 1, round(nx * (res - 1)))))
-        row = int(max(0, min(res - 1, round(ny * (res - 1)))))
-        flat_idx = row * res + col
-
-        # Look up angles at current time
-        time_index = self.controls.get_time_index()
-        theta1_at_t = float(
-            interpolate_angle(snapshots[:, 0, :], time_index)[flat_idx]
-        )
-        theta2_at_t = float(
-            interpolate_angle(snapshots[:, 1, :], time_index)[flat_idx]
-        )
-
-        # Compute t_value from slider position
-        t_end = self.controls.get_t_end()
-        slider_val = self.controls.time_slider.value()
-        slider_max = max(1, self.controls.time_slider.maximum())
-        t_value = (slider_val / slider_max) * t_end
-
-        self.inspect_column.update_hover_angle(
-            theta1, theta2,
-            theta1_at_t, theta2_at_t,
-            t_value, params,
-        )
-
     def _on_trajectory_pinned(
         self, row_id: str, theta1: float, theta2: float,
     ) -> None:
         """Canvas click in inspect mode: compute trajectory and add row."""
         params = self.controls.get_params()
 
-        # Compute t_end for the trajectory
-        if self._basin_mode:
-            mu = max(params.friction, 0.01)
-            t_end = min(5.0 / mu, 500.0)
-        else:
-            t_end = self.controls.get_t_end()
+        # Basin mode: t_end auto-scaled from friction
+        mu = max(params.friction, 0.01)
+        t_end = min(5.0 / mu, 500.0)
 
         # Compute the single trajectory via RK4
         trajectory = rk4_single_trajectory(

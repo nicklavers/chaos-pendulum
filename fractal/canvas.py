@@ -14,19 +14,12 @@ import uuid
 import numpy as np
 from PyQt6.QtCore import Qt, QTimer, QRectF, pyqtSignal
 from PyQt6.QtGui import (
-    QPainter, QColor, QPen, QFont, QFontMetrics, QConicalGradient,
+    QPainter, QColor, QPen, QFont, QFontMetrics, QImage,
 )
 from PyQt6.QtWidgets import QWidget
 
 from fractal.compute import FractalViewport
-from fractal.coloring import (
-    interpolate_angle, angle_to_argb, numpy_to_qimage,
-    build_hue_lut, DEFAULT_LUT_SIZE, COLORMAPS,
-)
-from fractal.bivariate import (
-    bivariate_to_argb, build_torus_legend, TORUS_COLORMAPS,
-    torus_rgb_aligned_ybgm,
-)
+from fractal.coloring import numpy_to_qimage
 from fractal.winding import (
     winding_to_argb, build_winding_legend, WINDING_COLORMAPS,
     winding_basin_hash,
@@ -51,15 +44,50 @@ AXIS_LINE_COLOR = QColor(255, 255, 255, 50)
 PI_LINE_COLOR = QColor(0, 0, 0)
 TICK_LENGTH = 5
 
-# Color wheel legend
-LEGEND_OUTER_RADIUS = 36   # outer radius of the donut
-LEGEND_INNER_RADIUS = 22   # inner radius (creates the ring)
-LEGEND_SEGMENTS = 72       # number of pie slices to draw (5-degree steps)
-
 # Ghost rectangle animation
 GHOST_FADE_MS = 2000       # total fade duration
 GHOST_FADE_TICK_MS = 33    # ~30 fps fade animation
 GHOST_INITIAL_ALPHA = 220  # starting opacity (0-255)
+
+
+def render_cube_to_qimage(cube_slice, colormap_fn) -> QImage:
+    """Render a CubeSlice to a QImage using the given winding colormap.
+
+    Extracts the rendering logic from display_basin_from_cube into a
+    reusable function for use in pan background etc.
+
+    Args:
+        cube_slice: CubeSlice with n1 (R,R) int8, n2 (R,R) int8,
+            brightness (R,R) uint8.
+        colormap_fn: Winding colormap function mapping (n1, n2) → BGRA.
+
+    Returns:
+        QImage with the rendered basin preview.
+    """
+    n1_2d = cube_slice.n1
+    n2_2d = cube_slice.n2
+    brightness_2d = cube_slice.brightness
+    R = n1_2d.shape[0]
+
+    # Flatten for colormap lookup
+    n1_flat = n1_2d.ravel().astype(np.int32)
+    n2_flat = n2_2d.ravel().astype(np.int32)
+
+    # Apply winding colormap → (N, 4) uint8 BGRA
+    pixels = colormap_fn(n1_flat, n2_flat)
+
+    # Apply pre-baked brightness: scale [0, 255] → [0.3, 1.0] float
+    brightness_flat = brightness_2d.ravel().astype(np.float32) / 255.0
+    brightness_scaled = np.float32(0.3) + np.float32(0.7) * brightness_flat
+
+    # Modulate BGR channels (leave alpha alone)
+    result = pixels.copy()
+    bgr = result[:, :3].astype(np.float32) * brightness_scaled[:, np.newaxis]
+    result[:, :3] = bgr.astype(np.uint8)
+
+    # Reshape to image
+    argb = result.reshape(R, R, 4)
+    return numpy_to_qimage(argb)
 
 
 def _format_angle(rad: float) -> str:
@@ -133,6 +161,7 @@ class FractalCanvas(QWidget):
     ic_selected = pyqtSignal(float, float)  # theta1, theta2 (Ctrl+click)
     hover_updated = pyqtSignal(float, float)  # theta1, theta2 (inspect mode)
     trajectory_pinned = pyqtSignal(str, float, float)  # row_id, theta1, theta2
+    pan_started = pyqtSignal()  # emitted at start of pan drag
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -149,22 +178,9 @@ class FractalCanvas(QWidget):
 
         # Display state
         self._current_image = None
-        self._current_snapshots = None
-        self._time_index = 0.0
 
-        # Color mapping
-        self._lut = build_hue_lut()
-        self._colormap_name = "HSV Hue Wheel"
-        self._angle_index = 2  # 0 = theta1, 1 = theta2, 2 = both
-
-        # Torus (bivariate) colormap state
-        self._torus_colormap_name = "RGB Aligned + YBGM"
-        self._torus_colormap_fn = torus_rgb_aligned_ybgm
-        self._cached_torus_legend_name: str | None = None
-        self._cached_torus_legend_image = None
-
-        # Basin (winding number) mode state
-        self._basin_mode = False
+        # Basin (winding number) mode — always on
+        self._basin_mode = True
         self._winding_colormap_name = "Basin Hash"
         self._winding_colormap_fn = winding_basin_hash
         self._cached_winding_legend_name: str | None = None
@@ -212,57 +228,18 @@ class FractalCanvas(QWidget):
         self._pinned_markers: dict[str, tuple[float, float, tuple[int, int, int]]] = {}
         self._highlighted_marker_id: str | None = None
 
+        # Stale overlay: previous high-res image shown during transitions
+        self._stale_image: QImage | None = None
+        self._stale_viewport: FractalViewport | None = None
+
+        # Pan background: low-res cube preview shown behind shifting foreground
+        self._pan_background: QImage | None = None
+        self._pan_bg_viewport: FractalViewport | None = None
+
     # -- Public interface --
 
-    def display(self, snapshots: np.ndarray, time_index: float) -> None:
-        """Update the displayed fractal image.
-
-        Args:
-            snapshots: (N, 2, n_samples) float32 array [theta1, theta2].
-            time_index: Which time sample to display.
-        """
-        self._current_snapshots = snapshots
-        self._time_index = time_index
-        self._rebuild_image()
-
-    def set_time_index(self, time_index: float) -> None:
-        """Update the time index and refresh the image (for slider scrub)."""
-        self._time_index = time_index
-        if self._current_snapshots is not None:
-            self._rebuild_image()
-
-    def set_colormap(self, name: str) -> None:
-        """Change the active colormap and refresh."""
-        if name in COLORMAPS:
-            self._colormap_name = name
-            self._lut = COLORMAPS[name]()
-            if self._current_snapshots is not None:
-                self._rebuild_image()
-
-    def set_angle_index(self, index: int) -> None:
-        """Change which angle is displayed and refresh.
-
-        Args:
-            index: 0=theta1, 1=theta2, 2=both (bivariate torus).
-        """
-        if index not in (0, 1, 2):
-            return
-        self._angle_index = index
-        if self._current_snapshots is not None:
-            self._rebuild_image()
-
-    def set_torus_colormap(self, name: str) -> None:
-        """Change the active torus colormap and refresh."""
-        if name not in TORUS_COLORMAPS:
-            return
-        self._torus_colormap_name = name
-        self._torus_colormap_fn = TORUS_COLORMAPS[name]
-        self._cached_torus_legend_name = None  # invalidate legend cache
-        if self._angle_index == 2 and self._current_snapshots is not None:
-            self._rebuild_image()
-
     def set_basin_mode(self, basin: bool) -> None:
-        """Toggle basin (winding number) display mode."""
+        """Set basin (winding number) display mode. Always True now."""
         self._basin_mode = basin
 
     @property
@@ -298,13 +275,28 @@ class FractalCanvas(QWidget):
             theta2_init: (N,) float32 array of initial theta2 values (for relative winding).
         """
         self._basin_mode = True
-        self._current_snapshots = None  # No time series in basin mode
         self._basin_theta1_final = theta1_final
         self._basin_theta2_final = theta2_final
         self._basin_theta1_init = theta1_init
         self._basin_theta2_init = theta2_init
         self._basin_convergence_times = convergence_times
         self._rebuild_image()
+
+    def display_basin_from_cube(self, cube_slice) -> None:
+        """Display a precomputed cube slice as an instant preview.
+
+        Takes a CubeSlice (n1, n2, brightness) and renders it using the
+        current winding colormap. Skips all integration — just colormap
+        lookup + brightness multiply.
+
+        Args:
+            cube_slice: CubeSlice with n1 (R,R) int8, n2 (R,R) int8,
+                brightness (R,R) uint8.
+        """
+        self._current_image = render_cube_to_qimage(
+            cube_slice, self._winding_colormap_fn,
+        )
+        self.update()
 
     def set_resolution(self, resolution: int) -> None:
         """Update the target resolution."""
@@ -369,8 +361,13 @@ class FractalCanvas(QWidget):
         """Zoom out by a fixed factor, showing a ghost of the previous region.
 
         Called externally (e.g. by a button in FractalControls via FractalView).
+        Saves the current image as a stale overlay before changing spans so
+        the high-res detail remains visible at its correct sub-region.
         """
         old_viewport = self.get_viewport()
+
+        # Snapshot high-res content before viewport changes
+        self.save_stale()
 
         # Compute new (larger) span
         new_span1 = min(MAX_SPAN, self._span_theta1 * ZOOM_OUT_FACTOR)
@@ -458,36 +455,55 @@ class FractalCanvas(QWidget):
         self._highlighted_marker_id = None
         self.update()
 
+    # -- Stale overlay / pan background --
+
+    def save_stale(self, viewport: FractalViewport | None = None) -> None:
+        """Snapshot _current_image as stale overlay.
+
+        The stale overlay is drawn on top of lower-res content so the user
+        sees crisp detail from the previous viewport while the progressive
+        pipeline sharpens the rest.
+
+        Args:
+            viewport: The viewport the image was rendered for.
+                Defaults to current viewport (correct for zoom-out
+                since it's called before spans change).
+        """
+        if self._current_image is None:
+            return
+        self._stale_image = self._current_image.copy()
+        self._stale_viewport = viewport if viewport is not None else self.get_viewport()
+
+    def clear_stale(self) -> None:
+        """Remove stale overlay (called when progressive pipeline finishes)."""
+        self._stale_image = None
+        self._stale_viewport = None
+        self.update()
+
+    def set_pan_background(self, image: QImage, viewport: FractalViewport) -> None:
+        """Set low-res background for pan drag.
+
+        The pan background fills exposed edges during drag so the user
+        sees blurry cube data instead of black.
+
+        Args:
+            image: QImage of the cube preview.
+            viewport: The viewport the background was rendered for
+                (typically the full [0, 2pi]^2 range).
+        """
+        self._pan_background = image
+        self._pan_bg_viewport = viewport
+
+    def clear_pan_background(self) -> None:
+        """Remove pan background (called on pan release)."""
+        self._pan_background = None
+        self._pan_bg_viewport = None
+
     # -- Image rendering --
 
     def _rebuild_image(self) -> None:
-        """Rebuild QImage from current snapshots and time index."""
-        if self._basin_mode:
-            self._rebuild_image_winding()
-            return
-
-        if self._current_snapshots is None:
-            return
-
-        if self._angle_index == 2:
-            # Bivariate mode: extract both angle slices
-            theta1_snaps = self._current_snapshots[:, 0, :]
-            theta2_snaps = self._current_snapshots[:, 1, :]
-            theta1 = interpolate_angle(theta1_snaps, self._time_index)
-            theta2 = interpolate_angle(theta2_snaps, self._time_index)
-            res = int(math.sqrt(theta1.shape[0]))
-            argb = bivariate_to_argb(
-                theta1, theta2, self._torus_colormap_fn, res,
-            )
-        else:
-            # Univariate mode: single angle via 1D LUT
-            angle_snapshots = self._current_snapshots[:, self._angle_index, :]
-            angles = interpolate_angle(angle_snapshots, self._time_index)
-            res = int(math.sqrt(angles.shape[0]))
-            argb = angle_to_argb(angles, self._lut, res)
-
-        self._current_image = numpy_to_qimage(argb)
-        self.update()
+        """Rebuild QImage from current basin data."""
+        self._rebuild_image_winding()
 
     def _rebuild_image_winding(self) -> None:
         """Rebuild QImage using winding number colormap (basin mode)."""
@@ -758,191 +774,6 @@ class FractalCanvas(QWidget):
 
     # -- Legend --
 
-    def _draw_legend(self, painter: QPainter) -> None:
-        """Draw a small color wheel donut in the bottom-right corner."""
-        img_x, img_y, side = self._image_rect()
-        lut = self._lut
-
-        outer_r = LEGEND_OUTER_RADIUS
-        inner_r = LEGEND_INNER_RADIUS
-
-        # Position: bottom-right of the image area, with a small inset
-        cx = img_x + side - outer_r - 8
-        cy = img_y + side - outer_r - 8
-
-        painter.save()
-        painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
-
-        # Draw the donut as pie-slice segments coloured from the LUT
-        lut_size = lut.shape[0]
-        n_seg = LEGEND_SEGMENTS
-        span_angle = 360.0 / n_seg
-
-        for i in range(n_seg):
-            # Map segment to LUT: segment 0 = angle 0 (top, 12 o'clock)
-            frac = i / n_seg
-            lut_idx = int(frac * lut_size) % lut_size
-            b, g, r, _a = int(lut[lut_idx, 0]), int(lut[lut_idx, 1]), \
-                int(lut[lut_idx, 2]), int(lut[lut_idx, 3])
-            color = QColor(r, g, b)
-
-            # Qt angles: 0 = 3 o'clock, measured counter-clockwise in
-            # 1/16th degree units. We want segment 0 at 6 o'clock (-90°)
-            # since θ=0 is the pendulum hanging straight down, increasing
-            # clockwise to match the pendulum angle convention.
-            start_deg = -90.0 + i * span_angle
-            start_16 = int(start_deg * 16)
-            span_16 = int(span_angle * 16)
-
-            painter.setPen(Qt.PenStyle.NoPen)
-            painter.setBrush(color)
-            painter.drawPie(
-                int(cx - outer_r), int(cy - outer_r),
-                outer_r * 2, outer_r * 2,
-                start_16, span_16,
-            )
-
-        # Punch out the center to make a donut
-        painter.setBrush(QColor(20, 20, 30))  # match background
-        painter.setPen(Qt.PenStyle.NoPen)
-        painter.drawEllipse(
-            int(cx - inner_r), int(cy - inner_r),
-            inner_r * 2, inner_r * 2,
-        )
-
-        # Draw tick marks and labels at 0, π/2, π, 3π/2
-        tick_angles = [
-            (0.0, "0"),
-            (math.pi / 2, "\u03c0/2"),
-            (math.pi, "\u03c0"),
-            (3 * math.pi / 2, "3\u03c0/2"),
-        ]
-
-        font = QFont("Helvetica", 10)
-        painter.setFont(font)
-        fm = QFontMetrics(font)
-
-        for angle_rad, label in tick_angles:
-            # Map physics angle to screen angle:
-            # physics 0 is at 6 o'clock (screen +90°/bottom), increasing
-            # clockwise (subtract because screen angles go counter-clockwise)
-            screen_rad = math.pi / 2 - angle_rad
-
-            # Tick line from inner_r-2 to outer_r+2
-            tick_inner = inner_r - 2
-            tick_outer = outer_r + 2
-            x_inner = cx + tick_inner * math.cos(screen_rad)
-            y_inner = cy + tick_inner * math.sin(screen_rad)
-            x_outer = cx + tick_outer * math.cos(screen_rad)
-            y_outer = cy + tick_outer * math.sin(screen_rad)
-
-            tick_pen = QPen(QColor(200, 200, 210))
-            tick_pen.setWidth(1)
-            painter.setPen(tick_pen)
-            painter.drawLine(
-                int(x_inner), int(y_inner),
-                int(x_outer), int(y_outer),
-            )
-
-            # Label positioned just outside the tick
-            label_r = outer_r + 6
-            lx = cx + label_r * math.cos(screen_rad)
-            ly = cy + label_r * math.sin(screen_rad)
-            tw = fm.horizontalAdvance(label)
-            th = fm.height()
-
-            # Adjust anchor based on quadrant
-            painter.setPen(QColor(160, 160, 170))
-            painter.drawText(
-                int(lx - tw / 2),
-                int(ly + th / 4),
-                label,
-            )
-
-        # Label in the center
-        painter.setPen(QColor(130, 130, 140))
-        center_label = "\u03b8\u2081" if self._angle_index == 0 else "\u03b8\u2082"
-        tw = fm.horizontalAdvance(center_label)
-        painter.drawText(
-            int(cx - tw / 2),
-            int(cy + fm.ascent() / 2 - 1),
-            center_label,
-        )
-
-        painter.restore()
-
-    def _draw_torus_legend(self, painter: QPainter) -> None:
-        """Draw a 2D square legend in the bottom-right corner (bivariate mode)."""
-        img_x, img_y, side = self._image_rect()
-
-        # Build or reuse cached legend image
-        if self._cached_torus_legend_name != self._torus_colormap_name:
-            legend_data = build_torus_legend(self._torus_colormap_fn, 64)
-            self._cached_torus_legend_image = numpy_to_qimage(legend_data)
-            self._cached_torus_legend_name = self._torus_colormap_name
-
-        legend_size = 64
-        padding = 8
-
-        # Position: bottom-right of image area
-        lx = int(img_x + side - legend_size - padding)
-        ly = int(img_y + side - legend_size - padding)
-
-        painter.save()
-
-        # Draw the legend square
-        painter.drawImage(lx, ly, self._cached_torus_legend_image)
-
-        # Border
-        painter.setPen(QColor(200, 200, 210))
-        painter.drawRect(lx, ly, legend_size, legend_size)
-
-        # Axis labels
-        font = QFont("Helvetica", 10)
-        painter.setFont(font)
-        fm = QFontMetrics(font)
-
-        # theta1 label (below, centered)
-        painter.setPen(QColor(160, 160, 170))
-        t1_label = "\u03b8\u2081"
-        tw = fm.horizontalAdvance(t1_label)
-        painter.drawText(
-            int(lx + legend_size / 2 - tw / 2),
-            ly + legend_size + fm.ascent() + 2,
-            t1_label,
-        )
-
-        # theta2 label (left, centered, rotated)
-        t2_label = "\u03b8\u2082"
-        painter.save()
-        painter.translate(lx - fm.ascent() - 2, ly + legend_size / 2)
-        painter.rotate(-90)
-        tw2 = fm.horizontalAdvance(t2_label)
-        painter.drawText(int(-tw2 / 2), 0, t2_label)
-        painter.restore()
-
-        # Corner labels: "0" and "2pi"
-        painter.setPen(QColor(130, 130, 140))
-        small_font = QFont("Helvetica", 8)
-        painter.setFont(small_font)
-        sfm = QFontMetrics(small_font)
-
-        # Bottom-left: "0", bottom-right: "2pi" (theta1 axis)
-        painter.drawText(lx, ly + legend_size + sfm.ascent(), "0")
-        tw_2pi = sfm.horizontalAdvance("2\u03c0")
-        painter.drawText(
-            int(lx + legend_size - tw_2pi),
-            ly + legend_size + sfm.ascent(),
-            "2\u03c0",
-        )
-
-        # Top-left: "0", bottom-left: "2pi" (theta2 axis, vertical)
-        tw_zero = sfm.horizontalAdvance("0")
-        painter.drawText(lx - tw_zero - 2, ly + sfm.ascent(), "0")
-        painter.drawText(lx - tw_2pi - 2, ly + legend_size, "2\u03c0")
-
-        painter.restore()
-
     def _draw_winding_legend(self, painter: QPainter) -> None:
         """Draw a 2D grid legend in the bottom-right corner (basin mode)."""
         img_x, img_y, side = self._image_rect()
@@ -1051,9 +882,25 @@ class FractalCanvas(QWidget):
             QPainter.RenderHint.SmoothPixmapTransform, False,
         )
 
-        # Clip image to the image area so it doesn't bleed into axes
+        # Clip all image layers to the image area
         painter.save()
         painter.setClipRect(int(img_x), int(img_y), int(side), int(side))
+
+        # Layer 2: Pan background — cube preview behind shifting foreground
+        if self._panning and self._pan_background is not None and self._pan_bg_viewport is not None:
+            bv = self._pan_bg_viewport
+            bg_tl_x, bg_tl_y = self._physics_to_pixel(
+                bv.center_theta1 - bv.span_theta1 / 2,
+                bv.center_theta2 - bv.span_theta2 / 2,
+            )
+            bg_br_x, bg_br_y = self._physics_to_pixel(
+                bv.center_theta1 + bv.span_theta1 / 2,
+                bv.center_theta2 + bv.span_theta2 / 2,
+            )
+            bg_rect = QRectF(bg_tl_x, bg_tl_y, bg_br_x - bg_tl_x, bg_br_y - bg_tl_y)
+            painter.drawImage(bg_rect, self._pan_background)
+
+        # Layer 3: Main image (shifted during pan)
         painter.drawImage(
             int(draw_x), int(draw_y),
             self._current_image.scaled(
@@ -1062,18 +909,31 @@ class FractalCanvas(QWidget):
                 Qt.TransformationMode.FastTransformation,
             ),
         )
+
+        # Layer 4: Stale overlay — old high-res at correct physics position
+        if self._stale_image is not None and self._stale_viewport is not None:
+            sv = self._stale_viewport
+            stale_tl_x, stale_tl_y = self._physics_to_pixel(
+                sv.center_theta1 - sv.span_theta1 / 2,
+                sv.center_theta2 - sv.span_theta2 / 2,
+            )
+            stale_br_x, stale_br_y = self._physics_to_pixel(
+                sv.center_theta1 + sv.span_theta1 / 2,
+                sv.center_theta2 + sv.span_theta2 / 2,
+            )
+            stale_rect = QRectF(
+                stale_tl_x, stale_tl_y,
+                stale_br_x - stale_tl_x, stale_br_y - stale_tl_y,
+            )
+            painter.drawImage(stale_rect, self._stale_image)
+
         painter.restore()
 
         # Axes, labels, and reference lines
         self._draw_axes(painter)
 
-        # Legend: winding grid, torus grid, or donut wheel
-        if self._basin_mode:
-            self._draw_winding_legend(painter)
-        elif self._angle_index == 2:
-            self._draw_torus_legend(painter)
-        else:
-            self._draw_legend(painter)
+        # Legend: winding grid
+        self._draw_winding_legend(painter)
 
         # Draw selection rectangle (while dragging)
         if self._selecting and self._select_rect is not None:
@@ -1169,7 +1029,8 @@ class FractalCanvas(QWidget):
                 self._select_anchor_y = event.position().y()
                 self._select_rect = None
             elif self._tool_mode == TOOL_PAN:
-                # Start panning
+                # Start panning — clean slate for pan interaction
+                self.clear_stale()
                 self._panning = True
                 pos = event.position()
                 self._pan_anchor_px = pos.x()
@@ -1177,6 +1038,7 @@ class FractalCanvas(QWidget):
                 self._pan_anchor_theta1 = self._center_theta1
                 self._pan_anchor_theta2 = self._center_theta2
                 self.setCursor(Qt.CursorShape.ClosedHandCursor)
+                self.pan_started.emit()
 
     def mouseMoveEvent(self, event):
         pos = event.position()
@@ -1255,6 +1117,17 @@ class FractalCanvas(QWidget):
             self.update()
 
         elif event.button() == Qt.MouseButton.LeftButton and self._panning:
+            # Build the viewport the current image was rendered for
+            # (anchor center + current spans) so stale overlay maps correctly
+            anchor_viewport = FractalViewport(
+                center_theta1=self._pan_anchor_theta1,
+                center_theta2=self._pan_anchor_theta2,
+                span_theta1=self._span_theta1,
+                span_theta2=self._span_theta2,
+                resolution=self._resolution,
+            )
+            self.save_stale(anchor_viewport)
+            self.clear_pan_background()
             self._panning = False
             self.setCursor(Qt.CursorShape.OpenHandCursor)
             self.viewport_changed.emit(self.get_viewport())

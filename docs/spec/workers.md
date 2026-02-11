@@ -48,17 +48,21 @@ controls.t_end_changed --> _on_t_end_changed --> clear cache + recompute
 controls.zoom_out_clicked --> _on_zoom_out --> canvas.zoom_out
 controls.tool_mode_changed --> canvas.set_tool_mode
 canvas.hover_updated --> _on_hover_updated (inspect tool lookup)
+canvas.pan_started --> _on_pan_started --> canvas.set_pan_background
 ```
 
 ### Computation Pipeline
 
 `_start_computation(viewport)`:
-1. Check cache for full-resolution result → cache hit: display immediately
-2. Cache miss: cancel any running worker
-3. Create new `FractalWorker` with task, backend, and progressive levels
-4. Connect worker signals
-5. Show loading overlay
-6. Start worker thread
+1. Check cache for full-resolution result → cache hit: display immediately, clear stale overlay, return
+2. Check cache for best lower-resolution match → display as interim preview
+3. Filter progressive levels: skip resolutions already cached at this viewport+params
+4. If all levels cached → clear stale overlay, return (no worker needed)
+5. Cancel any running worker
+6. Create new `FractalWorker` with task, backend, and filtered levels
+7. Connect worker signals
+8. Show loading overlay
+9. Start worker thread
 
 ### Worker Lifecycle Management
 
@@ -83,7 +87,7 @@ Retired workers clean themselves up via their `finished` signal.
 
 - `_on_level_complete(resolution, data, final_velocities)`: cache the result, display it (data shape differs by mode)
 - `_on_progress(steps_done, total_steps)`: update loading overlay percentage
-- `_on_all_complete()`: stop loading overlay, activate pending ghost rectangle
+- `_on_all_complete()`: stop loading overlay, activate pending ghost rectangle, clear stale overlay
 - `_on_worker_finished()`: clear worker reference if it's still the current one
 
 ## Separate Workers Per Mode

@@ -22,9 +22,9 @@ chaos-pendulum/
 
     fractal/
         __init__.py                   1 line
-        canvas.py                  1294 lines   FractalCanvas: QImage, pan/zoom, axes, legend, tools
-        controls.py                 438 lines   Time slider, colormap, resolution, basin mode, inspect
-        view.py                     610 lines   FractalView: orchestration, signal wiring
+        canvas.py                  1167 lines   FractalCanvas: QImage, pan/zoom, axes, legend, tools, compositing
+        controls.py                 198 lines   Basin mode, resolution, physics, inspect tool toggle
+        view.py                     641 lines   FractalView: orchestration, signal wiring, stale/pan management
         inspect_column.py           660 lines   InspectColumn: hover + stacked animation + scrub
         animated_diagram.py         373 lines   MultiTrajectoryDiagram: ghost IC + basin-colored bobs
         trajectory_indicator.py     321 lines   TrajectoryIndicator: Venn diagram with tapered arcs
@@ -61,9 +61,9 @@ chaos-pendulum/
 
 ## Notes
 
-- `fractal/canvas.py` (1294 lines) exceeds the 400-line guideline. Accumulated
-  features: axes, donut legend, torus legend, ghost rect, 3 tool modes,
-  coordinate mapping, bivariate display path, basin init angle storage.
+- `fractal/canvas.py` (1167 lines) exceeds the 400-line guideline. Accumulated
+  features: axes, legend, ghost rect, viewport transition compositing (stale
+  overlay + pan background), 3 tool modes, coordinate mapping, basin display.
   Consider extracting overlay drawing into `fractal/overlays.py` if it grows further.
 - `fractal/bivariate.py` (577 lines) exceeds the 400-line guideline due to 9
   colormap functions plus helper utilities. Each function is self-contained;
@@ -88,8 +88,7 @@ main.py --> app_window.py
               |     --> simulation.py
               |
               --> fractal/view.py
-                    --> fractal/canvas.py     --> fractal/coloring.py
-                    |                         --> fractal/bivariate.py
+                    --> fractal/canvas.py     --> fractal/coloring.py (numpy_to_qimage)
                     |                         --> fractal/winding.py
                     --> fractal/controls.py   --> ui_common.py
                     |     --> fractal/coloring.py  (COLORMAPS registry)

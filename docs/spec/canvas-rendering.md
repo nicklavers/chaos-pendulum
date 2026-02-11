@@ -1,7 +1,8 @@
 # Canvas Rendering
 
 Drawing pipeline for the fractal canvas: image display, axes, legend, ghost
-rectangle, and tool modes. File: `fractal/canvas.py` (~1294 lines).
+rectangle, viewport transition compositing, and tool modes.
+File: `fractal/canvas.py` (~1167 lines).
 
 > Cross-ref: [data-shapes.md](data-shapes.md) for `FractalViewport` and signals.
 > Cross-ref: [coloring-pipeline.md](coloring-pipeline.md) for pixel array generation.
@@ -85,6 +86,67 @@ sits within the new (larger) viewport.
 - Appears at full opacity during computation
 - Fade-out timer starts after final render (`activate_pending_ghost()`)
 - `GHOST_FADE_MS = 2000ms`, `GHOST_INITIAL_ALPHA = 220`
+
+## Viewport Transition Compositing
+
+Two-layer compositing system that provides visual continuity during viewport
+changes (zoom-out and pan). See [ADR-0015](../adr/0015-viewport-transition-compositing.md).
+
+### paintEvent Layer Order
+
+1. Dark background fill (`QColor(20, 20, 30)`)
+2. **Pan background** — low-res cube preview at full [0, 2π]² (during pan drag only)
+3. **Main image** (`_current_image`, shifted during pan)
+4. **Stale overlay** — previous high-res image at mapped sub-region (after transitions)
+5. Axes, legend, markers, ghost rect (existing overlays)
+
+All image layers (2–4) are clipped to the image area via `setClipRect`.
+
+### Stale Overlay
+
+Preserves high-res detail from the previous viewport while the progressive
+pipeline sharpens the new, wider view.
+
+**Fields**: `_stale_image: QImage | None`, `_stale_viewport: FractalViewport | None`
+
+**Lifecycle**:
+- `save_stale(viewport=None)` — snapshots `_current_image.copy()` and its viewport.
+  Defaults to current viewport (correct for zoom-out, called before spans change).
+- `clear_stale()` — called by `FractalView` when progressive pipeline finishes,
+  on full-res cache hit, or on physics param change.
+- Drawn on top of the main image at the correct physics position using
+  `_physics_to_pixel()` coordinate mapping.
+
+**When set**:
+- **Zoom out**: `save_stale()` called before spans change in `zoom_out()`.
+- **Pan release**: `save_stale(anchor_viewport)` called with the pre-pan viewport.
+- **Pan start**: `clear_stale()` called (clean slate for the drag).
+
+**Not set for zoom-in**: The stale image would completely cover the new zoomed-in
+view since it was rendered at a wider viewport. The progressive pipeline starts
+fast enough (64x64) that zoom-in works well without a stale overlay.
+
+### Pan Background
+
+Low-res cube data drawn behind the shifting foreground during pan drag, filling
+exposed edges that would otherwise be black.
+
+**Fields**: `_pan_background: QImage | None`, `_pan_bg_viewport: FractalViewport | None`
+
+**Lifecycle**:
+- `set_pan_background(image, viewport)` — called by `FractalView._on_pan_started()`
+  with a cube-rendered QImage at the full [0, 2π]² viewport.
+- `clear_pan_background()` — called on pan release in `mouseReleaseEvent`.
+- Only drawn while `_panning` is true.
+
+**Signal**: `pan_started` (no payload) emitted in `mousePressEvent` when a pan
+drag begins, so `FractalView` can render and provide the cube background.
+
+### `render_cube_to_qimage(cube_slice, colormap_fn) -> QImage`
+
+Module-level function that renders a `CubeSlice` to a `QImage` using the given
+winding colormap. Extracted from `display_basin_from_cube` for reuse by the pan
+background path in `FractalView`.
 
 ## Tool Modes
 

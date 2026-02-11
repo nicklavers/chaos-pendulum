@@ -186,6 +186,7 @@ to functions with signature `(theta1: ndarray, theta2: ndarray) -> (N, 4) uint8`
 | `zoom_out_clicked` | `FractalControls` | (no payload) |
 | `display_mode_changed` | `FractalControls` | `str` — "angle" or "basin" |
 | `winding_colormap_changed` | `FractalControls` | `str` — winding colormap name (basin mode) |
+| `pan_started` | `FractalCanvas` | (no payload) — emitted at start of pan drag |
 | `trajectory_pinned` | `FractalCanvas` | `(str, float, float)` — row_id, theta1, theta2 (inspect click) |
 | `row_removed` | `InspectColumn` | `str` — row_id of removed trajectory |
 | `all_cleared` | `InspectColumn` | (no payload) |

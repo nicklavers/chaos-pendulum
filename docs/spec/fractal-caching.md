@@ -6,12 +6,21 @@ Cache architecture for computed fractal data. File: `fractal/cache.py` (~176 lin
 
 ## Design
 
-Dict-based LRU with adaptive memory budget. Stores complete snapshot arrays
-keyed by quantized viewport + physics params hash.
+Dict-based LRU with adaptive memory budget. Stores computed arrays keyed by
+quantized viewport + physics params hash.
 
 ```python
-Dict[CacheKey, np.ndarray]  # values are (N, 2, n_samples) float32
+Dict[CacheKey, np.ndarray]  # basin mode: (N, 5) float32 [final_state + conv_time]
+                             # angle mode: (N, 2, n_samples) float32
 ```
+
+### Lookup Methods
+
+- `get(key)` — exact lookup by resolution + viewport + params. O(1).
+- `best_match(key)` — finds the highest-resolution cached entry matching the
+  same viewport + params (ignoring resolution). Used to display a lower-res
+  preview while the progressive pipeline computes the full resolution.
+  Also used to filter already-cached levels from the progressive pipeline.
 
 ## Memory Budget
 
@@ -43,18 +52,17 @@ CacheKey.from_viewport(viewport, params)  # quantizes + hashes
 
 ## Invalidation
 
-- **Physics params change**: `invalidate_params(old_params_hash)` removes all
-  entries for the old parameter set. The `params_hash` field in `CacheKey`
-  also prevents stale hits.
-- **t_end change**: `clear()` removes all entries (simulation duration changed,
-  all snapshots are invalid).
-- Cache lookup happens **after** the 300ms debounce timer fires, not during
-  intermediate pan/zoom events.
+- **Physics params change**: The `params_hash` field in `CacheKey` prevents
+  stale hits naturally. Old-param results are kept in the LRU so returning to
+  previously-visited params is instant (no recompute needed).
+- **Mode switch**: `clear()` removes all entries.
+- Cache lookup happens both during slider drag (instant preview from LRU) and
+  after the 300ms debounce timer fires (exact compute).
 
 ## Validation
 
 `put()` validates the array on insertion:
-- Must be 3D: `ndim == 3` (shape `(N, 2, n_samples)`)
+- Must be 2D or 3D: basin mode `(N, 5)` or angle mode `(N, 2, n_samples)`
 - Must be float32 dtype
 - Raises on invalid data to catch integration bugs early
 
