@@ -22,15 +22,15 @@ chaos-pendulum/
 
     fractal/
         __init__.py                   1 line
-        canvas.py                  1138 lines   FractalCanvas: QImage, pan/zoom, axes, legend, tools
-        controls.py                 512 lines   Time slider, colormap, resolution, basin mode, inspect
-        view.py                     528 lines   FractalView: orchestration, signal wiring
-        inspect_column.py           609 lines   InspectColumn: hover + stacked animation + scrub
+        canvas.py                  1294 lines   FractalCanvas: QImage, pan/zoom, axes, legend, tools
+        controls.py                 438 lines   Time slider, colormap, resolution, basin mode, inspect
+        view.py                     610 lines   FractalView: orchestration, signal wiring
+        inspect_column.py           660 lines   InspectColumn: hover + stacked animation + scrub
         animated_diagram.py         373 lines   MultiTrajectoryDiagram: ghost IC + basin-colored bobs
-        trajectory_indicator.py     316 lines   TrajectoryIndicator: Venn diagram with tapered arcs
+        trajectory_indicator.py     321 lines   TrajectoryIndicator: Venn diagram with tapered arcs
         pendulum_diagram.py         133 lines   PendulumDiagram: stick-figure widget
-        winding_circle.py           193 lines   WindingCircle: Venn diagram for basin hover
-        arrow_arc.py                188 lines   Tapered arc geometry + QPainter drawing
+        winding_circle.py           192 lines   WindingCircle: Venn diagram for basin hover
+        arrow_arc.py                187 lines   Tapered arc geometry + QPainter drawing
         worker.py                   120 lines   FractalWorker QThread (dispatches to backend RK4)
         compute.py                  183 lines   ComputeBackend Protocol, BatchResult, BasinResult, saddle_energy
         basin_solver.py             131 lines   DOP853 adaptive solver (UNUSED — see ADR-0013)
@@ -39,7 +39,7 @@ chaos-pendulum/
         cache.py                    176 lines   FractalCache, CacheKey, LRU
         coloring.py                 170 lines   HSV LUT, angle_to_argb, QImage builder (univariate)
         bivariate.py                577 lines   Torus colormaps, bivariate_to_argb, legend builder
-        winding.py                  230 lines   Winding number extraction + basin colormaps + brightness modulation
+        winding.py                  348 lines   Winding number extraction (absolute + relative) + basin colormaps + brightness modulation
 
     tests/
         test_simulation.py
@@ -57,14 +57,14 @@ chaos-pendulum/
         test_arrow_arc.py                      Tapered arc geometry: compute_tapered_arcs pure math
 ```
 
-**Total**: ~5,800 lines across ~30 modules.
+**Total**: ~6,400 lines across ~30 modules.
 
 ## Notes
 
-- `fractal/canvas.py` (1006 lines) exceeds the 400-line guideline. Accumulated
+- `fractal/canvas.py` (1294 lines) exceeds the 400-line guideline. Accumulated
   features: axes, donut legend, torus legend, ghost rect, 3 tool modes,
-  coordinate mapping, bivariate display path. Consider extracting overlay
-  drawing into `fractal/overlays.py` if it grows further.
+  coordinate mapping, bivariate display path, basin init angle storage.
+  Consider extracting overlay drawing into `fractal/overlays.py` if it grows further.
 - `fractal/bivariate.py` (577 lines) exceeds the 400-line guideline due to 9
   colormap functions plus helper utilities. Each function is self-contained;
   splitting would fragment related math.

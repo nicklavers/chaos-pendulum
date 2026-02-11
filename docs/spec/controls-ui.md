@@ -1,6 +1,6 @@
 # Controls UI
 
-Controls panel for fractal mode. File: `fractal/controls.py` (~512 lines).
+Controls panel for fractal mode. File: `fractal/controls.py` (~438 lines).
 
 > Cross-ref: [data-shapes.md](data-shapes.md) for signal payloads.
 > Cross-ref: [inspect-tool.md](inspect-tool.md) for the inspect panel.
@@ -72,19 +72,21 @@ Emits `zoom_out_clicked`. Canvas handles the actual zoom-out logic.
 
 Toggle button to switch between angle mode and basin mode:
 - **Angle mode** (default): time-scrubbing display, shows evolved angle at chosen time
-- **Basin mode**: damped simulation, shows final winding numbers with friction-based coloring
+- **Basin mode**: damped simulation, shows final relative winding numbers with convergence-time brightness
 
 When basin mode is active, time controls are hidden and the colormap dropdown
-switches to winding colormaps. A friction slider appears for adjusting the
-damping coefficient.
+switches to winding colormaps (defaulting to "Basin Hash" on first switch).
+If friction is near zero, it is auto-set to 0.38.
 
 Emits `display_mode_changed(str)` with "angle" or "basin".
 
 ### Physics Parameters
 
 Collapsible section containing `PhysicsParamsWidget` (from `ui_common.py`).
-Sliders for m1, m2, l1, l2, g, and friction. Note: "Changing physics will
-recompute the fractal" — discourages casual adjustment of expensive parameters.
+Sliders for m1, m2, l1, l2, g, and friction. Default slider values:
+m1=1.0 kg, m2=1.4 kg, l1=1.0 m, l2=0.3 m, μ=0.38.
+Note: "Changing physics will recompute the fractal" — discourages casual
+adjustment of expensive parameters.
 
 Emits `physics_changed` (no payload).
 
@@ -110,6 +112,8 @@ Angle readout labels below each diagram: "θ₁ = X.XX, θ₂ = X.XX".
 | `zoom_out_clicked` | (none) | Zoom out button clicked |
 | `tool_mode_changed` | `str` | Tool button toggled ("zoom", "pan", "inspect") |
 | `angle_selection_changed` | `int` | Angle dropdown changed (0, 1, or 2) |
+| `display_mode_changed` | `str` | Display mode toggled ("angle" or "basin") |
+| `winding_colormap_changed` | `str` | Winding colormap dropdown changed (basin mode) |
 
 ## Key Methods
 

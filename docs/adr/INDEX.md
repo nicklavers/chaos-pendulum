@@ -21,6 +21,7 @@ edited after creation; if a decision is revisited, a new ADR supersedes the old.
 | [0011](0011-energy-based-early-termination.md) | Energy-based early termination for basin mode | Superseded by 0012 | 2026-02 |
 | [0012](0012-basin-dop853-final-state.md) | DOP853 adaptive solver for basin mode (final state only) | Accepted | 2026-02 |
 | [0013](0013-convergence-time-brightness.md) | Convergence-time brightness modulation for basin mode | Accepted | 2026-02 |
+| [0014](0014-relative-winding-numbers.md) | Relative winding numbers over absolute | Accepted | 2026-02 |
 
 ## How to Write an ADR
 

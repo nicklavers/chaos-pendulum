@@ -184,6 +184,8 @@ to functions with signature `(theta1: ndarray, theta2: ndarray) -> (N, 4) uint8`
 | `tool_mode_changed` | `FractalControls` | `str` — "zoom", "pan", or "inspect" |
 | `angle_selection_changed` | `FractalControls` | `int` — 0 (theta1), 1 (theta2), or 2 (both) |
 | `zoom_out_clicked` | `FractalControls` | (no payload) |
+| `display_mode_changed` | `FractalControls` | `str` — "angle" or "basin" |
+| `winding_colormap_changed` | `FractalControls` | `str` — winding colormap name (basin mode) |
 | `trajectory_pinned` | `FractalCanvas` | `(str, float, float)` — row_id, theta1, theta2 (inspect click) |
 | `row_removed` | `InspectColumn` | `str` — row_id of removed trajectory |
 | `all_cleared` | `InspectColumn` | (no payload) |
@@ -192,9 +194,14 @@ to functions with signature `(theta1: ndarray, theta2: ndarray) -> (N, 4) uint8`
 
 ### Winding Number Arrays — `(N,)` int32
 
-Produced by `extract_winding_numbers()` in `fractal/winding.py`. Each value is
-`round(theta / 2pi)` — the integer number of full rotations a trajectory has
-accumulated. Used by basin mode's winding colormaps.
+Produced by `extract_winding_numbers_relative()` in `fractal/winding.py`.
+Each value is `round(theta_final / 2π) - round(theta_init / 2π)` — the net
+number of full rotations relative to the initial position. This relative
+definition eliminates off-by-one errors near full-rotation boundaries.
+
+The legacy `extract_winding_numbers()` (absolute: `round(theta / 2π)`) is
+retained for backward compatibility in tests but is not used by the UI.
+See [ADR-0014](../adr/0014-relative-winding-numbers.md).
 
 ## Key Functions
 
@@ -216,3 +223,7 @@ Used by the worker to enable early termination in basin mode.
 | `FRAME_SUBSAMPLE` | 6 | `fractal/inspect_column.py` |
 | `PAUSE_FRAMES` | 30 | `fractal/animated_diagram.py` |
 | `TRAIL_LENGTH` | 15 | `fractal/animated_diagram.py` |
+| `TAIL_WIDTH` | 6.5 | `fractal/arrow_arc.py` |
+| `ARC_GAP_DEGREES` | 4.0 | `fractal/arrow_arc.py` |
+| `SINGLE_GAP_DEGREES` | 40.0 | `fractal/arrow_arc.py` |
+| `TAPER_STEPS` | 32 | `fractal/arrow_arc.py` |

@@ -162,33 +162,39 @@ at half-pi points.
 
 ## Winding Number Path (basin mode)
 
-File: `fractal/winding.py` (~230 lines).
+File: `fractal/winding.py` (~348 lines).
 
 Used in basin mode. The RK4 backends return
 `BasinResult(final_state: (N, 4), convergence_times: (N,))` — the final state
-and convergence time of each trajectory. The view extracts theta1/theta2
-columns and convergence_times, then passes them to the canvas, which maps
-final unwrapped angles to integer winding numbers, applies an optional
-brightness modulation based on convergence time, then reshapes to BGRA pixels.
+and convergence time of each trajectory. The view reconstructs the initial
+angle grid from the viewport, extracts theta1/theta2 columns and
+convergence_times, then passes both final and initial angles to the canvas.
+The canvas maps them to relative winding numbers (net rotations from initial
+position), applies brightness modulation based on convergence time, then
+reshapes to BGRA pixels.
+
+> Cross-ref: [ADR-0014](../adr/0014-relative-winding-numbers.md) for why
+> relative winding numbers are used instead of absolute.
 
 ```
 BasinResult.final_state[:, 0]   (N,) theta1 final
 BasinResult.final_state[:, 1]   (N,) theta2 final
+build_initial_conditions()      (N,) theta1 init, (N,) theta2 init
 BasinResult.convergence_times   (N,) float32 seconds
-    |                              |              |
-    v                              v              |
-extract_winding_numbers()                         |
-    |                    |                        |
-    v                    v                        |
-n1 (N,) int32        n2 (N,) int32                |
-    \                  /                          |
-     v                v                           |
-colormap_fn(n1, n2)                               |
-    |                                             |
-    v                                             |
-(N, 4) uint8 BGRA                                |
-    |                                             v
-    +-- _apply_brightness_modulation(pixels, conv_times, invert)
+    |              |               |              |              |
+    v              v               v              v              |
+extract_winding_numbers_relative(final, init)                    |
+    |                    |                                       |
+    v                    v                                       |
+n1 (N,) int32        n2 (N,) int32                               |
+    \                  /                                         |
+     v                v                                          |
+colormap_fn(n1, n2)                                              |
+    |                                                            |
+    v                                                            |
+(N, 4) uint8 BGRA                                               |
+    |                                                            v
+    +-- _apply_brightness_modulation(pixels, conv_times)
     |       normalize times to [0,1], scale BGR by [0.3, 1.0]
     v
 (N, 4) uint8 BGRA (brightness-modulated)
@@ -202,17 +208,25 @@ QImage
 
 ### Winding Key Functions
 
+#### `extract_winding_numbers_relative(theta1_final, theta2_final, theta1_init, theta2_init) -> (n1, n2)` int32 arrays
+
+Computes relative winding numbers: `round(final / 2π) - round(init / 2π)`.
+This is the standard extraction used by the UI for all display, hover, and
+pin operations.
+
 #### `extract_winding_numbers(theta1, theta2) -> (n1, n2)` int32 arrays
 
-Rounds each unwrapped angle to the nearest integer multiple of 2pi.
+Legacy absolute extraction: `round(theta / 2π)`. Retained for backward
+compatibility in tests but not used by the UI.
 
-#### `winding_to_argb(theta1, theta2, colormap_fn, resolution, convergence_times=None) -> (res, res, 4) uint8`
+#### `winding_to_argb(theta1, theta2, colormap_fn, resolution, convergence_times=None, theta1_init=None, theta2_init=None) -> (res, res, 4) uint8`
 
-Full pipeline: extract winding numbers, apply colormap, optionally modulate
-brightness by convergence time, reshape to grid. When `convergence_times` is
-provided and values are non-uniform, pixel brightness is scaled to the range
-[0.3, 1.0] — fast convergence is bright (basin interiors), slow convergence
-is dark (basin boundaries).
+Full pipeline: extract winding numbers (relative when init arrays provided,
+absolute otherwise), apply colormap, optionally modulate brightness by
+convergence time, reshape to grid. The UI always provides init arrays.
+When `convergence_times` is provided and values are non-uniform, pixel
+brightness is scaled to [0.3, 1.0] — fast convergence is bright (basin
+interiors), slow convergence is dark (basin boundaries).
 
 #### `_apply_brightness_modulation(pixels, convergence_times) -> (N, 4) uint8`
 

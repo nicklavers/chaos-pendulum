@@ -1,7 +1,7 @@
 # Canvas Rendering
 
 Drawing pipeline for the fractal canvas: image display, axes, legend, ghost
-rectangle, and tool modes. File: `fractal/canvas.py` (~1006 lines).
+rectangle, and tool modes. File: `fractal/canvas.py` (~1294 lines).
 
 > Cross-ref: [data-shapes.md](data-shapes.md) for `FractalViewport` and signals.
 > Cross-ref: [coloring-pipeline.md](coloring-pipeline.md) for pixel array generation.
@@ -37,6 +37,8 @@ Triggers `_rebuild_image()`.
 `set_torus_colormap(name)`: Switches the active torus colormap from
 `TORUS_COLORMAPS` and invalidates the cached legend. Only rebuilds image
 if currently in bivariate mode.
+
+**Basin mode**: `display_basin_final(theta1_final, theta2_final, convergence_times, theta1_init, theta2_init)` stores final and initial angle arrays and calls `_rebuild_image_winding()`, which passes both to `winding_to_argb()` for relative winding number extraction. The view reconstructs init angles at the data's own resolution (not the canvas target resolution) to handle progressive rendering correctly. Default winding colormap: "Basin Hash".
 
 ### Axes and Labels
 

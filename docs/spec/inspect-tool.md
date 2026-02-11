@@ -8,7 +8,7 @@ diagrams; click to pin trajectories into a stacked animation with time scrubbing
 
 ## Components
 
-### InspectColumn (fractal/inspect_column.py, ~609 lines)
+### InspectColumn (fractal/inspect_column.py, ~660 lines)
 
 Top-level `QWidget` shown to the left of the canvas in inspect mode.
 
@@ -24,6 +24,14 @@ Top-level `QWidget` shown to the left of the canvas in inspect mode.
 - `_insertion_order: tuple[str, ...]` — preserves pin order
 - `_primary_id: str | None` — which trajectory is foregrounded (full opacity + trail)
 - `_dt`, `_t_end` — simulation time params for scrub label computation
+
+**Key methods**:
+- `add_row(row_id, theta1, theta2, trajectory, params, n1, n2)` — pin a trajectory
+- `remove_row(row_id)` — remove a pinned trajectory
+- `update_winding(row_id, n1, n2)` — update winding numbers + color for a trajectory
+- `get_pinned() -> dict[str, PinnedTrajectory]` — read-only access to pinned data
+- `get_marker_colors() -> dict[str, tuple[int, int, int]]` — current marker colors
+- `set_winding_colormap(name)` — recolor all trajectories for a new colormap
 
 **Signals**: `row_removed(str)`, `all_cleared()`, `indicator_hovered(str)`,
 `indicator_unhovered(str)`
@@ -42,13 +50,13 @@ Top-level `QWidget` shown to the left of the canvas in inspect mode.
 - `max_frames` property — length of longest trajectory
 - `frame_idx` property — current frame index
 
-### TrajectoryIndicator (fractal/trajectory_indicator.py, ~316 lines)
+### TrajectoryIndicator (fractal/trajectory_indicator.py, ~321 lines)
 
 Vertical Venn diagram (two linked rings) with tapered arcs encoding winding
 numbers. Top ring = arm 1 (n1), bottom ring = arm 2 (n2). Each ring shows
 |n| tapered arc segments spanning 360/|n| degrees each, fat at the tail and
-tapering to a point; n=0 shows a thin dotted outline. Positive n = CCW
-(counter-clockwise), negative = CW (clockwise).
+tapering to a point; n=0 shows a thin dotted outline. Positive n = CW
+(clockwise), negative = CCW (counter-clockwise).
 
 - 32px diameter per sub-circle, 35% overlap (~11px) → ~53px total vertical span
 - Neutral gray (55,55,70) background circles; basin-colored tapered arcs with dark outline
@@ -56,6 +64,7 @@ tapering to a point; n=0 shows a thin dotted outline. Positive n = CCW
 - Multi-pass draw order: bg circles → top arcs → bottom arcs → digits
 - `set_highlighted(bool)` — white border around unified figure-8 contour
 - `set_color(rgb)` — update fill color (e.g. on colormap change)
+- `set_winding(n1, n2)` — update winding numbers and trigger repaint
 - **Signals**: `clicked(str)`, `remove_clicked(str)`, `hovered(str)`, `unhovered(str)`
 
 ### PendulumDiagram (fractal/pendulum_diagram.py, ~133 lines)
@@ -67,18 +76,18 @@ Small `QWidget` that draws a double-pendulum stick figure at given angles.
 - `set_label(text)` — label above diagram (e.g. "Initial (t=0)", "At t = 12.5 s")
 - Colors: bob1 orange (255,120,80), bob2 cyan (80,200,255), arms white, pivot grey
 
-### WindingCircle (fractal/winding_circle.py, ~193 lines)
+### WindingCircle (fractal/winding_circle.py, ~192 lines)
 
 Vertical Venn diagram for basin-mode hover. Same linked-rings design as
 TrajectoryIndicator but dynamically sized to fit its container (typically
 110x110px). Neutral gray background circles with basin-colored tapered arcs
 and dark outline. Multi-pass draw order matches TrajectoryIndicator.
 
-### TaperedArc (fractal/arrow_arc.py, ~188 lines)
+### TaperedArc (fractal/arrow_arc.py, ~187 lines)
 
 Pure geometry + QPainter drawing functions for tapered arc segments. Shared
 by both TrajectoryIndicator and WindingCircle. Convention: 0° = top,
-positive = clockwise. Direction: positive n = CCW, negative n = CW.
+positive = clockwise. Direction: positive n = CW, negative n = CCW.
 
 - `compute_tapered_arcs(n)` — returns list of `TaperedArc(start_deg, span_deg, clockwise)`
 - `build_tapered_arc_polygon(cx, cy, arc_r, ...)` — returns QPolygonF for a single tapered arc
@@ -110,7 +119,8 @@ FractalView._on_hover_updated(theta1, theta2)
     |-- angle mode: look up snapshots at (flat_idx, time_index)
     |     --> InspectColumn.update_hover_angle(...)
     |
-    |-- basin mode: look up final_state at flat_idx, extract winding numbers
+    |-- basin mode: look up final_state at flat_idx, extract relative winding numbers
+          (using hovered theta1/theta2 as initial angles)
           --> InspectColumn.update_hover_basin(...)
 ```
 
@@ -126,8 +136,7 @@ FractalCanvas.trajectory_pinned(row_id, theta1, theta2)
 FractalView._on_trajectory_pinned(row_id, theta1, theta2)
     |-- Compute t_end (basin: 5/friction, capped 500; angle: user slider)
     |-- Run rk4_single_trajectory(params, theta1, theta2, t_end, dt)
-    |-- Extract winding numbers from final state
-    |-- inspect_column.set_time_params(t_end, dt)
+    |-- Extract relative winding numbers from final state (using theta1/theta2 as init)
     |-- Look up basin color, update canvas marker color
     |-- inspect_column.set_time_params(t_end, dt)
     |-- inspect_column.add_row(row_id, theta1, theta2, trajectory, params, n1, n2)
