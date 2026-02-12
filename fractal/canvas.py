@@ -53,7 +53,7 @@ GHOST_INITIAL_ALPHA = 220  # starting opacity (0-255)
 
 # Inspect cursor
 CURSOR_SIZE = 24         # pixmap side length
-CURSOR_HOTSPOT_X = 3     # tip position within pixmap
+CURSOR_HOTSPOT_X = 4     # tip position within pixmap
 CURSOR_HOTSPOT_Y = 1
 CURSOR_DEFAULT_COLOR = QColor(180, 180, 190)
 
@@ -72,16 +72,16 @@ def _build_inspect_cursor(fill: QColor) -> QCursor:
     pixmap = QPixmap(CURSOR_SIZE, CURSOR_SIZE)
     pixmap.fill(Qt.GlobalColor.transparent)
 
-    # Arrow polygon: tip at top-left, body extends down-right
+    # Arrow polygon: straight left-edge shaft, proportional wing and tail
     arrow = QPolygonF([
-        QPointF(3, 1),    # tip
-        QPointF(3, 17),   # left edge bottom
-        QPointF(7, 13),   # notch
-        QPointF(12, 20),  # tail bottom-right
-        QPointF(15, 18),  # tail top-right
-        QPointF(9, 11),   # notch inner
-        QPointF(15, 5),   # right wing
-        QPointF(3, 1),    # close
+        QPointF(4, 1),      # tip
+        QPointF(4, 17),     # shaft bottom
+        QPointF(7, 14),     # notch outer
+        QPointF(11, 20),    # tail bottom
+        QPointF(13.5, 18),  # tail top
+        QPointF(9.5, 12),   # notch inner
+        QPointF(14, 7),     # wing tip
+        QPointF(4, 1),      # close
     ])
 
     painter = QPainter(pixmap)
