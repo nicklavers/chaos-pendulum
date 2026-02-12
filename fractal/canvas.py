@@ -12,9 +12,10 @@ import math
 import uuid
 
 import numpy as np
-from PyQt6.QtCore import Qt, QTimer, QRectF, pyqtSignal
+from PyQt6.QtCore import Qt, QTimer, QRectF, QPointF, pyqtSignal
 from PyQt6.QtGui import (
     QPainter, QColor, QPen, QFont, QFontMetrics, QImage,
+    QCursor, QPixmap, QPainterPath, QPolygonF,
 )
 from PyQt6.QtWidgets import QWidget
 
@@ -48,6 +49,53 @@ TICK_LENGTH = 5
 GHOST_FADE_MS = 2000       # total fade duration
 GHOST_FADE_TICK_MS = 33    # ~30 fps fade animation
 GHOST_INITIAL_ALPHA = 220  # starting opacity (0-255)
+
+
+# Inspect cursor
+CURSOR_SIZE = 24         # pixmap side length
+CURSOR_HOTSPOT_X = 3     # tip position within pixmap
+CURSOR_HOTSPOT_Y = 1
+CURSOR_DEFAULT_COLOR = QColor(180, 180, 190)
+
+
+def _build_inspect_cursor(fill: QColor) -> QCursor:
+    """Build a small arrow cursor with a black outline and the given fill.
+
+    The arrow points up-left, with the tip at (CURSOR_HOTSPOT_X, CURSOR_HOTSPOT_Y).
+
+    Args:
+        fill: Interior fill color for the arrow.
+
+    Returns:
+        QCursor with the custom pixmap and correct hotspot.
+    """
+    pixmap = QPixmap(CURSOR_SIZE, CURSOR_SIZE)
+    pixmap.fill(Qt.GlobalColor.transparent)
+
+    # Arrow polygon: tip at top-left, body extends down-right
+    arrow = QPolygonF([
+        QPointF(3, 1),    # tip
+        QPointF(3, 17),   # left edge bottom
+        QPointF(7, 13),   # notch
+        QPointF(12, 20),  # tail bottom-right
+        QPointF(15, 18),  # tail top-right
+        QPointF(9, 11),   # notch inner
+        QPointF(15, 5),   # right wing
+        QPointF(3, 1),    # close
+    ])
+
+    painter = QPainter(pixmap)
+    painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+
+    # Black outline
+    outline_pen = QPen(QColor(0, 0, 0), 1.5)
+    outline_pen.setJoinStyle(Qt.PenJoinStyle.MiterJoin)
+    painter.setPen(outline_pen)
+    painter.setBrush(fill)
+    painter.drawPolygon(arrow)
+
+    painter.end()
+    return QCursor(pixmap, CURSOR_HOTSPOT_X, CURSOR_HOTSPOT_Y)
 
 
 def render_cube_to_qimage(cube_slice, colormap_fn) -> QImage:
@@ -342,8 +390,24 @@ class FractalCanvas(QWidget):
         elif mode == TOOL_PAN:
             self.setCursor(Qt.CursorShape.OpenHandCursor)
         else:
-            self.setCursor(Qt.CursorShape.PointingHandCursor)
+            self.setCursor(_build_inspect_cursor(CURSOR_DEFAULT_COLOR))
         self.update()
+
+    def set_inspect_cursor_color(
+        self, r: int, g: int, b: int,
+    ) -> None:
+        """Update the inspect cursor fill to match the hovered winding color.
+
+        Only takes effect when in inspect mode. Builds a new cursor pixmap.
+
+        Args:
+            r: Red component (0-255).
+            g: Green component (0-255).
+            b: Blue component (0-255).
+        """
+        if self._tool_mode != TOOL_INSPECT:
+            return
+        self.setCursor(_build_inspect_cursor(QColor(r, g, b)))
 
     def activate_pending_ghost(self) -> None:
         """Start fading the ghost rectangle (call after final render).

@@ -153,7 +153,8 @@ FractalView._on_trajectory_pinned(row_id, theta1, theta2)
 
 ## Interaction
 
-- Inspect mode: cursor changes to `PointingHandCursor`
+- Inspect mode: custom arrow cursor with black outline; fill color dynamically
+  matches the winding basin color of the hovered point (via `set_inspect_cursor_color`)
 - Hover updates diagrams in real-time
 - Click pins a trajectory (adds to animation + indicator row + canvas marker)
 - Canvas markers are colored X shapes matching the basin colormap color

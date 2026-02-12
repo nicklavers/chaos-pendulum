@@ -603,6 +603,12 @@ class FractalView(QWidget):
             theta1, theta2, n1, n2, colormap_fn, params,
         )
 
+        # Update cursor fill to match the hovered winding color
+        b_val, g_val, r_val, _a = get_single_winding_color(
+            n1, n2, colormap_fn,
+        )
+        self.canvas.set_inspect_cursor_color(r_val, g_val, b_val)
+
     def _on_trajectory_pinned(
         self, row_id: str, theta1: float, theta2: float,
     ) -> None:

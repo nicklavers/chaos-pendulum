@@ -22,7 +22,7 @@ chaos-pendulum/
 
     fractal/
         __init__.py                   1 line
-        canvas.py                  1167 lines   FractalCanvas: QImage, pan/zoom, axes, legend, tools, compositing
+        canvas.py                  1231 lines   FractalCanvas: QImage, pan/zoom, axes, legend, tools, compositing, inspect cursor
         controls.py                 198 lines   Basin mode, resolution, physics, inspect tool toggle
         view.py                     641 lines   FractalView: orchestration, signal wiring, stale/pan management
         inspect_column.py           659 lines   InspectColumn: hover + stacked animation + scrub + freeze-frame
@@ -61,10 +61,11 @@ chaos-pendulum/
 
 ## Notes
 
-- `fractal/canvas.py` (1167 lines) exceeds the 400-line guideline. Accumulated
+- `fractal/canvas.py` (1231 lines) exceeds the 400-line guideline. Accumulated
   features: axes, legend, ghost rect, viewport transition compositing (stale
-  overlay + pan background), 3 tool modes, coordinate mapping, basin display.
-  Consider extracting overlay drawing into `fractal/overlays.py` if it grows further.
+  overlay + pan background), 3 tool modes, coordinate mapping, basin display,
+  custom inspect cursor. Consider extracting overlay drawing into
+  `fractal/overlays.py` if it grows further.
 - `fractal/bivariate.py` (577 lines) exceeds the 400-line guideline due to 9
   colormap functions plus helper utilities. Each function is self-contained;
   splitting would fragment related math.

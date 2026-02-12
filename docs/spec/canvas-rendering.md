@@ -2,7 +2,7 @@
 
 Drawing pipeline for the fractal canvas: image display, axes, legend, ghost
 rectangle, viewport transition compositing, and tool modes.
-File: `fractal/canvas.py` (~1167 lines).
+File: `fractal/canvas.py` (~1231 lines).
 
 > Cross-ref: [data-shapes.md](data-shapes.md) for `FractalViewport` and signals.
 > Cross-ref: [coloring-pipeline.md](coloring-pipeline.md) for pixel array generation.
@@ -157,7 +157,7 @@ See [inspect-tool.md](inspect-tool.md) for the inspect mode data flow.
 |------|----------|--------|----------|
 | Zoom | `TOOL_ZOOM` | CrossCursor | Drag rectangle to zoom in |
 | Pan | `TOOL_PAN` | OpenHand / ClosedHand | Drag to pan with live image offset |
-| Inspect | `TOOL_INSPECT` | PointingHand | Hover emits `hover_updated` signal |
+| Inspect | `TOOL_INSPECT` | Custom arrow (color-matched) | Hover emits `hover_updated` signal |
 
 All modes support Ctrl+click for IC selection (emits `ic_selected`, launches
 trajectory in pendulum mode).
