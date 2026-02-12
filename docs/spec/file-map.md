@@ -25,8 +25,8 @@ chaos-pendulum/
         canvas.py                  1167 lines   FractalCanvas: QImage, pan/zoom, axes, legend, tools, compositing
         controls.py                 198 lines   Basin mode, resolution, physics, inspect tool toggle
         view.py                     641 lines   FractalView: orchestration, signal wiring, stale/pan management
-        inspect_column.py           660 lines   InspectColumn: hover + stacked animation + scrub
-        animated_diagram.py         373 lines   MultiTrajectoryDiagram: ghost IC + basin-colored bobs
+        inspect_column.py           659 lines   InspectColumn: hover + stacked animation + scrub + freeze-frame
+        animated_diagram.py         696 lines   MultiTrajectoryDiagram: ghost IC + basin-colored bobs + freeze-frame + settle truncation
         trajectory_indicator.py     321 lines   TrajectoryIndicator: Venn diagram with tapered arcs
         pendulum_diagram.py         133 lines   PendulumDiagram: stick-figure widget
         winding_circle.py           192 lines   WindingCircle: Venn diagram for basin hover
@@ -53,11 +53,11 @@ chaos-pendulum/
         test_winding.py                        Winding number extraction + colormaps
         test_energy_termination.py             Freeze behavior, speedup, winding stability
         test_inspect_utils.py                  rk4_single_trajectory + get_single_winding_color
-        test_multi_trajectory.py               TrajectoryInfo, PinnedTrajectory, color lookup, constants
+        test_multi_trajectory.py               TrajectoryInfo, PinnedTrajectory, color lookup, freeze-frame, settle truncation
         test_arrow_arc.py                      Tapered arc geometry: compute_tapered_arcs pure math
 ```
 
-**Total**: ~6,400 lines across ~30 modules.
+**Total**: ~6,700 lines across ~30 modules.
 
 ## Notes
 
@@ -96,7 +96,7 @@ main.py --> app_window.py
                     |     --> fractal/winding.py   (WINDING_COLORMAPS registry)
                     |     --> fractal/pendulum_diagram.py --> simulation.py
                     --> fractal/inspect_column.py
-                    |     --> fractal/animated_diagram.py --> simulation.py
+                    |     --> fractal/animated_diagram.py --> simulation.py, fractal/compute.py
                     |     --> fractal/trajectory_indicator.py --> fractal/arrow_arc.py
                     |     --> fractal/pendulum_diagram.py
                     |     --> fractal/winding_circle.py --> fractal/arrow_arc.py

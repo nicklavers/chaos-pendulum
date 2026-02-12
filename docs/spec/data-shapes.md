@@ -224,6 +224,7 @@ Used by the worker to enable early termination in basin mode.
 | `FRAME_SUBSAMPLE` | 6 | `fractal/inspect_column.py` |
 | `PAUSE_FRAMES` | 30 | `fractal/animated_diagram.py` |
 | `TRAIL_LENGTH` | 15 | `fractal/animated_diagram.py` |
+| `SETTLE_BUFFER_SECONDS` | 5.0 | `fractal/animated_diagram.py` |
 | `TAIL_WIDTH` | 6.5 | `fractal/arrow_arc.py` |
 | `ARC_GAP_DEGREES` | 4.0 | `fractal/arrow_arc.py` |
 | `SINGLE_GAP_DEGREES` | 40.0 | `fractal/arrow_arc.py` |

@@ -317,7 +317,9 @@ class InspectColumn(QWidget):
         )
         indicator.clicked.connect(self._on_indicator_clicked)
         indicator.remove_clicked.connect(self._on_indicator_remove)
+        indicator.hovered.connect(self._on_indicator_hovered)
         indicator.hovered.connect(self.indicator_hovered)
+        indicator.unhovered.connect(self._on_indicator_unhovered)
         indicator.unhovered.connect(self.indicator_unhovered)
         self._indicators = {**self._indicators, row_id: indicator}
 
@@ -340,6 +342,9 @@ class InspectColumn(QWidget):
         """Remove a pinned trajectory by ID."""
         if row_id not in self._pinned:
             return
+
+        # Exit freeze-frame if the removed trajectory was being hovered
+        self._anim_diagram.exit_freeze_frame()
 
         # Remove from pinned dict (immutable rebuild)
         self._pinned = {
@@ -376,6 +381,9 @@ class InspectColumn(QWidget):
 
     def clear_all(self) -> None:
         """Remove all pinned trajectories."""
+        # Exit freeze-frame before clearing
+        self._anim_diagram.exit_freeze_frame()
+
         # Remove all indicator widgets
         for indicator in self._indicators.values():
             self._indicator_layout.removeWidget(indicator)
@@ -492,6 +500,7 @@ class InspectColumn(QWidget):
         """
         self._t_end = t_end
         self._dt = dt
+        self._anim_diagram.set_dt_per_frame(FRAME_SUBSAMPLE * dt)
         self._update_scrub_time_label()
 
     def _on_anim_tick(self) -> None:
@@ -531,7 +540,7 @@ class InspectColumn(QWidget):
 
     def _on_scrub_released(self) -> None:
         """User released scrub slider: resume auto-advance if playing."""
-        if self._play_btn.isChecked():
+        if self._play_btn.isChecked() and not self._anim_diagram.is_frozen:
             self._anim_timer.start()
 
     def _on_play_toggled(self, checked: bool) -> None:
@@ -542,7 +551,8 @@ class InspectColumn(QWidget):
         if checked:
             self._play_btn.setText("⏸")
             self._scrub_playing = True
-            self._anim_timer.start()
+            if not self._anim_diagram.is_frozen:
+                self._anim_timer.start()
         else:
             self._play_btn.setText("▶")
             self._scrub_playing = False
@@ -606,6 +616,27 @@ class InspectColumn(QWidget):
         """Update which indicator has the primary highlight."""
         for row_id, indicator in self._indicators.items():
             indicator.set_highlighted(row_id == self._primary_id)
+
+    # --- Freeze-frame hover ---
+
+    def _on_indicator_hovered(self, row_id: str) -> None:
+        """Indicator mouse-enter: show freeze-frame for this trajectory."""
+        pt = self._pinned.get(row_id)
+        if pt is None:
+            return
+
+        tinfo = TrajectoryInfo(
+            trajectory=pt.trajectory,
+            color_rgb=pt.color_rgb,
+        )
+        self._anim_diagram.enter_freeze_frame(tinfo)
+        self._anim_timer.stop()
+
+    def _on_indicator_unhovered(self, row_id: str) -> None:
+        """Indicator mouse-leave: restore normal animation."""
+        self._anim_diagram.exit_freeze_frame()
+        if self._scrub_playing:
+            self._anim_timer.start()
 
     # --- Callbacks ---
 

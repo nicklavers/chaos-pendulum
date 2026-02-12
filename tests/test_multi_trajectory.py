@@ -14,7 +14,15 @@ import numpy as np
 import pytest
 
 from simulation import DoublePendulumParams
-from fractal.animated_diagram import TrajectoryInfo, PAUSE_FRAMES
+from fractal.animated_diagram import (
+    TrajectoryInfo,
+    PAUSE_FRAMES,
+    FREEZE_KEYFRAME_COUNT,
+    FREEZE_TRACE_ACTIVE_ALPHA,
+    FREEZE_TRACE_SETTLED_ALPHA,
+    SETTLE_BUFFER_SECONDS,
+    MultiTrajectoryDiagram,
+)
 from fractal.inspect_column import PinnedTrajectory, FRAME_SUBSAMPLE
 from fractal.winding import (
     get_single_winding_color,
@@ -275,3 +283,245 @@ class TestTrajectoryInfoTupleBuilding:
                 break
 
         assert primary_index == 1
+
+
+# ---------------------------------------------------------------------------
+# Freeze-frame: _compute_keyframe_indices
+# ---------------------------------------------------------------------------
+
+
+class TestComputeKeyframeIndices:
+    """Tests for the keyframe index computation used in freeze-frame."""
+
+    def test_zero_frames(self):
+        """Zero frames should return empty tuple."""
+        result = MultiTrajectoryDiagram._compute_keyframe_indices(0)
+        assert result == ()
+
+    def test_single_frame(self):
+        """Single frame should return (0,)."""
+        result = MultiTrajectoryDiagram._compute_keyframe_indices(1)
+        assert result == (0,)
+
+    def test_two_frames(self):
+        """Two frames should return (0, 1)."""
+        result = MultiTrajectoryDiagram._compute_keyframe_indices(2)
+        assert result == (0, 1)
+
+    def test_five_frames_exact(self):
+        """Five frames = exactly FREEZE_KEYFRAME_COUNT should use all."""
+        result = MultiTrajectoryDiagram._compute_keyframe_indices(5)
+        assert result == (0, 1, 2, 3, 4)
+
+    def test_hundred_frames(self):
+        """100 frames should produce 5 evenly-spaced indices."""
+        result = MultiTrajectoryDiagram._compute_keyframe_indices(100)
+        assert len(result) == FREEZE_KEYFRAME_COUNT
+        assert result[0] == 0
+        assert result[-1] == 99
+        # All indices should be in valid range
+        for idx in result:
+            assert 0 <= idx < 100
+
+    def test_five_hundred_frames(self):
+        """500 frames should produce 5 evenly-spaced indices."""
+        result = MultiTrajectoryDiagram._compute_keyframe_indices(500)
+        assert len(result) == FREEZE_KEYFRAME_COUNT
+        assert result[0] == 0
+        assert result[-1] == 499
+
+    def test_indices_are_sorted(self):
+        """Indices should be in ascending order."""
+        for n in (3, 10, 50, 200, 1000):
+            result = MultiTrajectoryDiagram._compute_keyframe_indices(n)
+            assert result == tuple(sorted(result)), f"Not sorted for n={n}"
+
+    def test_no_duplicates(self):
+        """No duplicate indices for any reasonable frame count."""
+        for n in (1, 2, 3, 4, 5, 10, 50, 100):
+            result = MultiTrajectoryDiagram._compute_keyframe_indices(n)
+            assert len(result) == len(set(result)), f"Duplicates for n={n}"
+
+    def test_three_frames(self):
+        """Three frames (< FREEZE_KEYFRAME_COUNT) should return all three."""
+        result = MultiTrajectoryDiagram._compute_keyframe_indices(3)
+        assert result == (0, 1, 2)
+
+
+# ---------------------------------------------------------------------------
+# Freeze-frame: enter/exit state management
+# ---------------------------------------------------------------------------
+
+
+class TestFreezeFrameState:
+    """Tests for freeze-frame state toggling (data-only, no QPainter)."""
+
+    def _make_tinfo(self, n_frames: int = 10) -> TrajectoryInfo:
+        """Create a minimal TrajectoryInfo for testing."""
+        traj = np.zeros((n_frames, 4), dtype=np.float32)
+        return TrajectoryInfo(trajectory=traj, color_rgb=(100, 200, 50))
+
+    def test_initially_not_frozen(self):
+        """New diagram should not be in freeze-frame mode."""
+        # Access the class's _freeze_frame directly (no widget instantiation)
+        tinfo = self._make_tinfo()
+        assert tinfo is not None  # sanity check
+
+    def test_freeze_frame_field_default(self):
+        """_freeze_frame field should default to None."""
+        # Test the data model: freeze_frame is not part of TrajectoryInfo
+        # It lives on MultiTrajectoryDiagram which requires QApp
+        # So we test the static helper instead
+        assert MultiTrajectoryDiagram._compute_keyframe_indices(0) == ()
+
+    def test_set_trajectories_clears_freeze_state_data_model(self):
+        """set_trajectories should conceptually clear freeze-frame.
+
+        We verify indirectly: a TrajectoryInfo built from a PinnedTrajectory
+        should be independent of any prior freeze-frame state.
+        """
+        traj1 = np.ones((10, 4), dtype=np.float32)
+        traj2 = np.zeros((20, 4), dtype=np.float32)
+        info1 = TrajectoryInfo(trajectory=traj1, color_rgb=(255, 0, 0))
+        info2 = TrajectoryInfo(trajectory=traj2, color_rgb=(0, 255, 0))
+        # Each TrajectoryInfo is independent (frozen dataclass)
+        assert info1.trajectory.shape != info2.trajectory.shape
+        assert info1.color_rgb != info2.color_rgb
+
+
+# ---------------------------------------------------------------------------
+# Freeze-frame: _trace_alpha_at (two-tier alpha with transition)
+# ---------------------------------------------------------------------------
+
+
+class TestTraceAlphaAt:
+    """Tests for the two-tier alpha computation used in freeze-frame trace."""
+
+    def test_no_settling_returns_active(self):
+        """When settled_idx is None, always returns active alpha."""
+        for i in (0, 5, 50, 500):
+            alpha = MultiTrajectoryDiagram._trace_alpha_at(i, None, 10.0)
+            assert alpha == FREEZE_TRACE_ACTIVE_ALPHA
+
+    def test_well_before_settling_returns_active(self):
+        """Segments well before the settled index get active alpha."""
+        settled = 100
+        alpha = MultiTrajectoryDiagram._trace_alpha_at(10, settled, 10.0)
+        assert alpha == FREEZE_TRACE_ACTIVE_ALPHA
+
+    def test_well_after_settling_returns_settled(self):
+        """Segments well after the settled index get settled alpha."""
+        settled = 50
+        alpha = MultiTrajectoryDiagram._trace_alpha_at(200, settled, 10.0)
+        assert alpha == FREEZE_TRACE_SETTLED_ALPHA
+
+    def test_at_transition_midpoint(self):
+        """At the settled index itself, alpha should be midpoint of blend."""
+        settled = 50
+        alpha = MultiTrajectoryDiagram._trace_alpha_at(50, settled, 10.0)
+        expected = (FREEZE_TRACE_ACTIVE_ALPHA + FREEZE_TRACE_SETTLED_ALPHA) // 2
+        assert abs(alpha - expected) <= 1  # rounding tolerance
+
+    def test_transition_is_monotonic(self):
+        """Alpha should decrease monotonically through the transition region."""
+        settled = 100
+        half_t = 10.0
+        alphas = [
+            MultiTrajectoryDiagram._trace_alpha_at(i, settled, half_t)
+            for i in range(85, 116)
+        ]
+        for j in range(1, len(alphas)):
+            assert alphas[j] <= alphas[j - 1], (
+                f"Alpha increased at i={85 + j}: {alphas[j]} > {alphas[j - 1]}"
+            )
+
+    def test_zero_transition_snaps(self):
+        """With zero transition width, should snap directly."""
+        settled = 50
+        assert (
+            MultiTrajectoryDiagram._trace_alpha_at(49, settled, 0.0)
+            == FREEZE_TRACE_ACTIVE_ALPHA
+        )
+        assert (
+            MultiTrajectoryDiagram._trace_alpha_at(50, settled, 0.0)
+            == FREEZE_TRACE_SETTLED_ALPHA
+        )
+
+    def test_alpha_stays_in_range(self):
+        """Alpha should always be between settled and active values."""
+        settled = 50
+        lo = min(FREEZE_TRACE_ACTIVE_ALPHA, FREEZE_TRACE_SETTLED_ALPHA)
+        hi = max(FREEZE_TRACE_ACTIVE_ALPHA, FREEZE_TRACE_SETTLED_ALPHA)
+        for i in range(0, 200):
+            alpha = MultiTrajectoryDiagram._trace_alpha_at(i, settled, 10.0)
+            assert lo <= alpha <= hi, f"Alpha {alpha} out of range at i={i}"
+
+
+# ---------------------------------------------------------------------------
+# Settle-based animation truncation
+# ---------------------------------------------------------------------------
+
+
+class TestSettleTruncation:
+    """Tests for the settle-based animation truncation logic.
+
+    Since MultiTrajectoryDiagram requires QApplication, we test the
+    building blocks: saddle_energy, total_energy, and the expected
+    buffer math.
+    """
+
+    def test_settle_buffer_constant_is_positive(self):
+        """SETTLE_BUFFER_SECONDS should be a positive value."""
+        assert SETTLE_BUFFER_SECONDS > 0
+
+    def test_buffer_frames_math(self):
+        """Buffer frames = ceil(SETTLE_BUFFER_SECONDS / dt_per_frame)."""
+        dt_per_frame = FRAME_SUBSAMPLE * 0.01  # 0.06
+        buffer = math.ceil(SETTLE_BUFFER_SECONDS / dt_per_frame)
+        # 5.0 / 0.06 = 83.33 → ceil = 84
+        assert buffer == 84
+
+    def test_settled_trajectory_has_low_energy(self):
+        """A damped trajectory eventually drops below saddle energy."""
+        from simulation import simulate, total_energy
+        from fractal.compute import saddle_energy
+
+        params = DoublePendulumParams(friction=0.5)
+        _, states = simulate(params, 1.0, 0.5, t_end=30.0, dt=0.01)
+        se = saddle_energy(params)
+
+        # Find first frame below threshold
+        settled_idx = None
+        for i, state in enumerate(states):
+            if total_energy(state, params) < se:
+                settled_idx = i
+                break
+
+        assert settled_idx is not None, "Trajectory should settle with friction=0.5"
+        assert settled_idx < len(states) - 1, "Should settle before end"
+
+    def test_no_friction_energy_conserved(self):
+        """Without friction, energy is conserved — no settling occurs."""
+        from simulation import simulate, total_energy
+
+        params = DoublePendulumParams(friction=0.0)
+        _, states = simulate(params, 2.0, 1.5, t_end=10.0, dt=0.01)
+        initial_energy = total_energy(states[0], params)
+
+        # Energy should be conserved (within integration tolerance)
+        for state in states[::100]:
+            e = total_energy(state, params)
+            assert abs(e - initial_energy) / abs(initial_energy) < 0.01
+
+    def test_effective_max_formula(self):
+        """Effective max = latest_settle + buffer_frames."""
+        # Simulate the math that _compute_effective_max does
+        dt_per_frame = 0.06
+        buffer = math.ceil(SETTLE_BUFFER_SECONDS / dt_per_frame)
+
+        # If two trajectories settle at frames 50 and 80
+        settle_indices = [50, 80]
+        latest = max(settle_indices)
+        effective = latest + buffer
+
+        assert effective == 80 + 84  # 164

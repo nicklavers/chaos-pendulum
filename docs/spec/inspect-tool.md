@@ -5,6 +5,7 @@ diagrams; click to pin trajectories into a stacked animation with time scrubbing
 
 > Cross-ref: [canvas-rendering.md](canvas-rendering.md) for tool mode architecture.
 > Cross-ref: [data-shapes.md](data-shapes.md) for `TrajectoryInfo`, `PinnedTrajectory`.
+> Cross-ref: [ADR-0016](../adr/0016-freeze-frame-settle-aware-animation.md) for freeze-frame and settle-truncation design rationale.
 
 ## Components
 
@@ -162,6 +163,67 @@ FractalView._on_trajectory_pinned(row_id, theta1, theta2)
 - "Clear All" removes all pinned trajectories and canvas markers
 - Scrub slider or play/pause controls the animation timeline
 - Colormap changes propagate to all indicator colors, the animation, and canvas markers
+
+## Freeze-Frame Hover
+
+Hovering over a `TrajectoryIndicator` temporarily replaces the normal
+stacked animation with a static freeze-frame view of that single trajectory.
+
+**Behaviour**:
+- On indicator `hovered(row_id)`: build `TrajectoryInfo` from the corresponding
+  `PinnedTrajectory`, call `MultiTrajectoryDiagram.enter_freeze_frame(tinfo)`,
+  stop the animation timer.
+- On indicator `unhovered(row_id)`: call `exit_freeze_frame()`, restart the
+  timer if `_scrub_playing` is true.
+- `_on_play_toggled`: skip `_anim_timer.start()` while `is_frozen`.
+- `remove_row` / `clear_all`: call `exit_freeze_frame()` before cleanup.
+
+**Freeze-frame rendering** (`_paint_freeze_frame`):
+1. Full bob2 trace as per-segment polyline with **two-tier alpha**: segments before
+   the system settles into a basin are drawn at high opacity (`FREEZE_TRACE_ACTIVE_ALPHA`);
+   segments after settling are drawn at low opacity (`FREEZE_TRACE_SETTLED_ALPHA`).
+   A short transition region (`FREEZE_TRACE_TRANSITION` frames) blends linearly between
+   the two. The settle point is detected by comparing `total_energy(state, params)`
+   against `saddle_energy(params)` — the first frame where energy drops below the
+   saddle threshold. If friction is zero or energy never drops, full active alpha is used.
+2. Pendulum arms at 5 evenly-spaced keyframes (0%, 25%, 50%, 75%, 100%).
+   Gray (220,220,220) arms with alpha ramp 50→200. Basin-colored bobs (5px radius)
+   with matching alpha.
+3. Pivot drawn on top (same as normal mode).
+
+**Constants** (in `fractal/animated_diagram.py`):
+
+| Constant | Value | Description |
+|----------|-------|-------------|
+| `FREEZE_TRACE_WIDTH` | 2 | Trace line width (px) |
+| `FREEZE_TRACE_ACTIVE_ALPHA` | 200 | Pre-settling trace opacity |
+| `FREEZE_TRACE_SETTLED_ALPHA` | 40 | Post-settling trace opacity |
+| `FREEZE_TRACE_TRANSITION` | 20 | Transition region width (frames) |
+| `FREEZE_ARM_ALPHA_MIN` | 50 | Earliest keyframe arm opacity |
+| `FREEZE_ARM_ALPHA_MAX` | 200 | Latest keyframe arm opacity |
+| `FREEZE_KEYFRAME_COUNT` | 5 | Number of keyframe poses |
+| `FREEZE_BOB_RADIUS` | 5 | Keyframe bob radius (px) |
+| `SETTLE_BUFFER_SECONDS` | 5.0 | Post-settle buffer before truncation |
+
+## Settle-Based Animation Truncation
+
+When all pinned trajectories have dropped below the saddle energy threshold
+(i.e. they are permanently captured in a basin), the animation is truncated
+so it ends `SETTLE_BUFFER_SECONDS` after the **latest** trajectory settles.
+
+**Mechanism**:
+- `MultiTrajectoryDiagram._compute_effective_max()` runs `_find_settled_index()`
+  on each trajectory. If every trajectory has a settle point, the effective max is
+  `max(settle_indices) + ceil(SETTLE_BUFFER_SECONDS / dt_per_frame)`.
+- If any trajectory never settles (friction=0 or energy stays above threshold),
+  no truncation occurs — the full trajectory length is used.
+- `_effective_max` is recomputed on every `set_trajectories()` call, so
+  adding/removing trajectories automatically updates the animation duration.
+- The `max_frames` property returns `min(actual_max, effective_max)` when
+  truncation is active. The scrub slider range, animation loop, and time label
+  all derive from `max_frames`, so they update automatically.
+- `InspectColumn.set_time_params()` calls `set_dt_per_frame(FRAME_SUBSAMPLE * dt)`
+  so the diagram knows the correct time scale.
 
 ## Constants
 
