@@ -72,16 +72,15 @@ def _build_inspect_cursor(fill: QColor) -> QCursor:
     pixmap = QPixmap(CURSOR_SIZE, CURSOR_SIZE)
     pixmap.fill(Qt.GlobalColor.transparent)
 
-    # Arrow polygon: straight left-edge shaft, proportional wing and tail
+    # 4-point arrowhead: two equal long sides (tip→left, tip→right)
+    # and two equal short sides (left→notch, notch→right) forming a
+    # concave back.  Axis angle 20°, splay 22°, length 17, notch depth 5.
     arrow = QPolygonF([
-        QPointF(4, 1),      # tip
-        QPointF(4, 17),     # shaft bottom
-        QPointF(7, 14),     # notch outer
-        QPointF(11, 20),    # tail bottom
-        QPointF(13.5, 18),  # tail top
-        QPointF(9.5, 12),   # notch inner
-        QPointF(14, 7),     # wing tip
-        QPointF(4, 1),      # close
+        QPointF(4.00, 1.00),     # tip
+        QPointF(3.41, 17.99),    # left
+        QPointF(7.68, 11.11),    # notch (concave back)
+        QPointF(15.38, 13.63),   # right
+        QPointF(4.00, 1.00),     # close
     ])
 
     painter = QPainter(pixmap)
